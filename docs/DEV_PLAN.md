@@ -2,8 +2,36 @@
 
 Status: v3, the simplified plan, reviewed. It replaces v2 (in git history: grants, policy file,
 relay, passkeys, 1Password). Part 2 lists what the review found. Part 1 already includes the fixes,
-marked **[R#]**.
+marked **[R#]**. §0 checks the plan against the original idea.
 Date: 2026-11-07
+
+## Part 0: The original idea, and where this plan differs
+
+The idea that started the project:
+
+- Do not change `bw`. Bitwarden encrypts on the client; the server cannot gate access, and
+  "master password reprompt" is client-side only, so an agent can skip it. **The approval must
+  control who holds the decryption key.** This plan keeps that principle: only the broker holds
+  `BW_SESSION`.
+- Self-hosted server (Vaultwarden or official Bitwarden). → Kept as an option. The broker works with
+  any server `bw` can log in to (§7).
+- Broker runs `bw serve` on localhost. → **Changed.** `bw serve` has no authentication; any local
+  process could read the whole vault without approval. The broker runs `bw get` per request instead
+  (§7).
+- Per-item policy "auto" or "ask". → **Kept, in the broker config by item id**, not as a vault tag
+  (§5, R4).
+- Push via ntfy, Pushover, or Telegram; passkey or TOTP for stronger proof. → v1 uses ntfy plus the
+  approval password, typed on the phone over the tailnet. Passkeys are later (§13).
+- Short expiry and a log of every request. → 120 s expiry, one secret per approval, JSON audit log
+  (§8).
+- **Separate Bitwarden account for the agent**, seeing only one collection. → **Added as a
+  required setup step** (§7, R15). It was missing from the simplified plan.
+- **`bw get totp` is critical.** → **Added** (§5, R16). It was missing from the simplified plan.
+- Python + FastAPI starter. → Go was chosen in the simplified plan: one static binary, no runtime
+  for the separate service user to keep up to date.
+- Alternative: Bitwarden Secrets Manager machine accounts. → Not used. Vaultwarden does not support
+  it, the official server needs a licence, and it has no per-request human approval. Noted in §14.
+
 
 ## Part 1: The plan
 
@@ -73,11 +101,17 @@ after 60 s or less, so there are two calls:
 - Response headers: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
   `X-Frame-Options: DENY`.
 
-### 5. `auto` items **[R4]**
+### 5. Policy: `auto` and `ask` **[R4] [R16]**
 
-v1 has no `auto`. Every request asks. If you need it later, list the auto items **in the broker
-config by item id** (`broker auto add <item-id>`), not as a tag in the vault. Anyone who can edit a
-vault item, for example a member of a shared collection, could add a vault tag and widen access.
+- Default for every item: **ask**.
+- `broker auto add <item-id> [--field F]` marks an item as **auto**: it is returned at once, with an
+  audit line and an informational push ("agent X read item Y"). The list lives in the broker
+  config, by item id, not as a tag in the vault. Anyone who can edit a vault item, for example a
+  member of a shared collection, could add a vault tag and widen access.
+- The **`totp` field is never auto**, and `broker auto add` refuses it. A TOTP code is a second
+  factor; an agent that holds both the password and the code holds the whole login.
+- A request for `password` and a request for `totp` of the same item within 10 minutes is marked on
+  the approval page: "this agent now has both factors for this login".
 
 ### 6. Notification (ntfy)
 
@@ -92,7 +126,16 @@ vault item, for example a member of a shared collection, could add a vault tag a
 
 ### 7. Vault
 
-- Prerequisite, once: `bw config server ...` and `bw login --apikey`, as the broker user.
+- **Separate Bitwarden account for agents [R15]** (required). Create an account such as
+  `agents@...`. Put agent-safe items in one organization collection and share only that collection
+  with this account. The broker logs in as this account, never as your main account. Critical items
+  are then not in the broker's vault at all, even if the broker is compromised. Vaultwarden supports
+  organizations and collections without a licence.
+- Server: bitwarden.com, EU cloud, or self-hosted Vaultwarden / Bitwarden. A self-hosted server can
+  live on the tailnet only.
+- Prerequisite, once: `bw config server ...` and `bw login --apikey`, as the broker user, with the
+  agents account's API key.
+- The master password the broker asks for is the **agents account's** master password, not yours.
 - `broker start` asks for the master password through a prompt the broker owns (its own TTY, or
   `systemd-ask-password` when run as a service), runs `bw unlock --raw`, and keeps `BW_SESSION` in
   memory only **[R12]**.
@@ -142,7 +185,8 @@ deploy/              systemd unit, sysusers.d entry
 
 ### 11. Milestones
 
-1. Vault adapter, pending map, agent API, `broker-get`. Test with `curl`.
+1. Vault adapter (agents account), pending map, agent API, `broker-get`, auto/ask with the `totp`
+   rule. Test with `curl`.
 2. Approval page, signed link, password check, approver-IP check, lockouts.
 3. ntfy, with the URL check and a short message body.
 4. Admin CLI, `doctor`, systemd unit with a separate user.
@@ -158,6 +202,8 @@ deploy/              systemd unit, sysusers.d entry
 - `/a` routes are absent on the agent listener, and `/v1` routes on the tailnet listener.
 - Tampered or expired link fails. A link for request A cannot approve request B.
 - Two items with the same name return 409.
+- `broker auto add` refuses `totp`; a `totp` request always asks.
+- An item outside the agents collection is not found (the broker's account cannot see it).
 - As the agent's OS user: cannot read the config, cannot read `/proc/<broker>/environ` or memory,
   cannot run `bw` with the broker's data.
 - The audit log never contains a value or a password (search the log for test values).
@@ -177,7 +223,8 @@ stronger check than its IP. It adds a large dependency, so it waits until it is 
 
 ### 14. Out of scope for v1
 
-1Password, multi-user, grants, policy files, passkeys, Windows, macOS service setup. All of these
+1Password, multi-user, grants, policy files, passkeys, Windows, macOS service setup, Bitwarden
+Secrets Manager machine accounts. All of these
 are in v2 in git history if needed later.
 
 ---
@@ -210,6 +257,13 @@ are in v2 in git history if needed later.
   side can try 3 on each new request. Argon2id slows it down; a global limit stops it.
 - **R7. Approval fatigue.** The 5-pending cap limits parallel requests, not a stream of them. Fix:
   suspend the agent after 3 denials in 10 minutes.
+- **R15. The broker could unlock your main vault.** The simplified plan did not say which account
+  the broker uses. If it is your main account, one broker bug or a careless approval exposes every
+  item, including bank logins. Fix: a separate agents account that can see only one collection
+  (from the original idea).
+- **R16. TOTP codes were treated like any other field.** With `auto`, an agent could get a TOTP code
+  with no approval at all. Fix: `totp` is always ask, and getting both factors of one login is
+  flagged.
 - **R8. ntfy and iOS.** Self-hosted ntfy reaches iOS only through ntfy.sh's upstream relay. The
   "refuse ntfy.sh" rule must not block that setup. Also, keep the item name out of the push text.
 
@@ -238,7 +292,10 @@ are in v2 in git history if needed later.
 ## Part 3: Open questions
 
 1. Agree with **no `tailscale serve`** in v1 (§13)?
-2. Drop `auto` for v1 (§5)? I recommend yes.
+2. Keep `auto`, as in the original idea, but only from the broker config by item id (§5)? I
+   recommend yes, now that the agents account limits what auto can reach.
 3. Phone: iPhone or Android? This decides whether ntfy needs the ntfy.sh upstream (§6).
 4. Does the broker run on the same machine as the agent? The plan assumes yes. On a separate machine,
    R2 goes away, and the agent API must move to the tailnet, also with an IP allowlist.
+5. Bitwarden server: bitwarden.com, EU cloud, or self-hosted Vaultwarden? Either works; self-hosted
+   gives free organizations for the agents collection.
