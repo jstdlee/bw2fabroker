@@ -1,0 +1,5 @@
+.git
+bin
+dist
+deploy/docker/agent
+deploy/docker/.env

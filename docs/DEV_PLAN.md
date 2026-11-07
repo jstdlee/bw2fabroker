@@ -1,6 +1,6 @@
 # bw2fabroker: development plan
 
-Status: v4. It records the owner's decisions of 2026-11-07: Tailscale required but no device check,
+Status: v4, **implemented** (milestones 1–5; see "Implementation notes" at the end). It records the owner's decisions of 2026-11-07: Tailscale required but no device check,
 own-domain ntfy enforced by the broker, and a strict response contract for agents with a matching
 agent skill. Older versions are in git history. Part 2 lists the review findings; Part 1 already
 includes the fixes, marked **[R#]**.
@@ -103,7 +103,7 @@ agent.
 | `pending` | `null` | no: call `wait` again |
 | `approved` | `null` (`auto` for auto items) | yes: `value` is set, once |
 | `denied` | `denied_by_user`, `expired`, `too_many_password_errors`, `unknown_request` (restart or already delivered) | yes |
-| `rejected` | `bad_request`, `unknown_item`, `ambiguous_item`, `field_not_allowed`, `value_too_large`, `locked`, `rate_limited`, `suspended`, `unauthorized` | yes |
+| `rejected` | `bad_request`, `unknown_item`, `ambiguous_item`, `field_not_allowed`, `value_too_large`, `locked`, `rate_limited`, `suspended`, `unauthorized`, `internal_error` | yes |
 
 Rules the broker enforces:
 
@@ -116,12 +116,14 @@ Rules the broker enforces:
   contract.
 
 **Helper `broker-get`** prints exactly one JSON line in the same shape and exits 0 (approved),
-1 (denied), or 2 (rejected):
+1 (denied), or 2 (rejected). It checks every broker answer against the contract (exactly four keys,
+fixed codes) and turns anything else into `rejected` / `internal_error`:
 
 - `broker-get ITEM FIELD --reason "..."` prints the line with `value`.
 - `broker-get --env VAR ITEM FIELD --reason "..." -- CMD...` puts the value in `CMD`'s environment
-  only and prints the line with `"value": "[in env VAR]"`, so the secret does not land in the
-  agent's transcript **[R10]**. This is the default the agent skill tells agents to use.
+  only and prints the line, on stderr, with `"value": "[in env VAR]"`, so the secret does not land
+  in the agent's transcript **[R10]**. The exit status is then `CMD`'s own. `CMD` never gets the
+  agent token. This is the default the agent skill tells agents to use.
 
 ### 5. Approver side (tailnet only)
 
@@ -383,3 +385,43 @@ service setup, Bitwarden Secrets Manager.
 | 7 | Vault server | Self-hosted Vaultwarden / Bitwarden or Bitwarden cloud. (§8) |
 
 No open questions block milestone 1.
+
+## Implementation notes (2026-11-07)
+
+What was built, and where it differs in detail from the plan above:
+
+- **Code**: `cmd/broker` (server + admin CLI), `cmd/broker-get`, and `internal/{contract, auth,
+  config, notify, tailscale, vault, pending, api}` as in §14. Go 1.24, dependencies:
+  `BurntSushi/toml`, `x/crypto/argon2`, `x/term`.
+- **Admin socket**: `broker unlock`, `unlock-approvals`, `agent resume`, and `status` reach the
+  running broker through a unix socket of mode 0600 (`admin.sock`), so only the broker user or root
+  can use them.
+- **Config reload**: the running broker reloads the config file when it changes, so `agent add`,
+  `passwd`, and `auto` take effect without a restart. A broken file keeps the last good config.
+- **Extra limit**: at most 20 new requests per agent per 10 minutes (`rate_limited`), in addition
+  to 5 pending.
+- **Approver range check**: the approver listener binds only to the tailnet IP and answers only
+  callers with a Tailscale address (100.64.0.0/10 or fd7a:115c:a1e0::/48). This is a range check,
+  not a device check (owner decision in §10).
+- **Field check before asking**: the broker checks that the field exists before it sends the push,
+  so you are not asked to approve a field that is missing (`field_not_allowed`).
+- **`internal_error`** was added to the rejected codes for unexpected failures and recovered panics.
+- **Docker**: `Dockerfile` (Bitwarden CLI 2026.10.0 on Node 22, uid 10001) and
+  `deploy/docker/compose.yml` with a `tailscale/tailscale` sidecar in kernel networking mode, so the
+  broker can bind the tailnet IP.
+- **App mode**: `deploy/systemd/bw2fabroker.service` (hardened unit) and a sysusers entry for the
+  `broker` user and `broker-clients` group.
+
+Verified:
+
+- Unit and handler tests with the race detector (`make test`), including every item in §16 that does
+  not need a real Bitwarden server or a phone.
+- End to end with the real binaries: fake tailscaled local API, a fake `bw` script, a local HTTPS ntfy
+  server on its own domain, and a tailnet test address on loopback: init, ntfy domain refusals, agent
+  add, doctor, start locked, unlock, approve after a wrong password, `--env` mode, deny,
+  rejections, Tailscale down/up, refusal to start with Tailscale stopped, no secret in any log.
+- The Docker image builds and runs as a non-root user with `bw` 2026.10.0.
+
+Not yet verified: a real Bitwarden or Vaultwarden server (the `bw` adapter is tested against a
+script that mimics `bw`'s JSON output), a real iPhone and ntfy server, the systemd unit on a real
+host, and the compose file with a real Tailscale auth key.

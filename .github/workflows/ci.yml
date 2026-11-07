@@ -1,0 +1,24 @@
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make vet
+      - run: make test
+      - run: go test -run=NONE -fuzz=FuzzParseRequest -fuzztime=20s ./internal/contract
+      - run: make build
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t bw2fabroker:ci .
+      - run: docker run --rm --entrypoint sh bw2fabroker:ci -c 'broker version && bw --version'
