@@ -258,7 +258,7 @@ is now fixed in Part 1, or is an open question in Part 3.
    `ptrace` it or read `BW_SESSION` from `/proc`. → Dedicated `bw2fa` user, `PR_SET_DUMPABLE=0`,
    attack suite (§3, §4, §8).
 2. **`bw serve` has no auth.** v1 used it on `localhost`. Every local process could read the full
-   vault, with no approval at all. → Private network namespace / token shim; release blocker (§5.3).
+   vault, with no approval at all. → Private network namespace on Linux, per-request `bw get` on macOS; release blocker (§5.3).
 3. **2FA code typed where the agent can see it.** v1 asked for the TOTP code in the agent's
    terminal. The agent can read the screen, or trick the human into typing the code into its own
    prompt. → Broker-owned prompt only; passkey is the default (§5.2).
