@@ -1,7 +1,10 @@
 # bw2fabroker
 
-A small Go broker in front of the Bitwarden CLI. An agent asks for one item field. You approve it on
-your phone over your tailnet with an approval password. The broker then gives that one value to the
-agent once.
+A small Go broker in front of the Bitwarden CLI. An agent asks for one field of one item. You approve
+it on your phone (push from your own ntfy domain, approval page on your tailnet, approval password).
+The broker returns that one value once, in a fixed JSON shape; nothing else passes to the agent.
 
-Status: planning. See [docs/DEV_PLAN.md](docs/DEV_PLAN.md).
+- Plan: [docs/DEV_PLAN.md](docs/DEV_PLAN.md)
+- Agent skill: [skills/bw-broker/SKILL.md](skills/bw-broker/SKILL.md)
+
+Status: planning.
