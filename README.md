@@ -1,7 +1,7 @@
 # bw2fabroker
 
-A local access broker for Bitwarden and 1Password CLIs. Agents and scripts ask the broker for one
-secret. A human approves the request on a second factor (phone passkey, TOTP, or a security key).
-The broker then releases only that value, for a limited time, and logs the event.
+A small Go broker in front of the Bitwarden CLI. An agent asks for one item field. You approve it on
+your phone over your tailnet with an approval password. The broker then gives that one value to the
+agent once.
 
 Status: planning. See [docs/DEV_PLAN.md](docs/DEV_PLAN.md).
