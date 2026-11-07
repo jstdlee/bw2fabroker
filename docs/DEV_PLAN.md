@@ -55,7 +55,7 @@ The broker keeps no database. Pending requests live in memory only.
 - The approval password is separate from the Bitwarden master password. The master password is
   never typed on the page.
 
-### 3. Agent API (unix socket or `127.0.0.1`, agent token required)
+### 3. Agent API (unix socket, `127.0.0.1`, or tailnet for remote agents; agent token required; see §15)
 
 HTTP long-poll. It is simpler than WebSocket and `curl` works with it. Agent tools often stop a call
 after 60 s or less, so there are two calls:
@@ -95,9 +95,10 @@ after 60 s or less, so there are two calls:
   it. It checks the MAC in constant time and checks that the id is still pending.
 - 3 wrong passwords deny the request. 10 wrong passwords in an hour, across all requests, lock
   approvals until `broker unlock-approvals` and send an alert **[R6]**.
-- Source check **[R1]**: the broker accepts approve and deny calls only from the phone's own
-  tailnet IP, set with `broker net set --approver-ip`. Tailscale IPs stay the same for a node. It
-  refuses its own host's tailnet IP, so an agent on the same machine cannot use the approver side.
+- Source check **[R1]**: the broker asks tailscaled who is calling (`whois` on the remote address,
+  §13) and accepts approve and deny calls only from the phone's node (stored by its stable node
+  id; the IP is checked too). It refuses its own node and every node registered for a remote agent,
+  so an agent cannot use the approver side.
 - Response headers: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
   `X-Frame-Options: DENY`.
 
@@ -119,10 +120,15 @@ after 60 s or less, so there are two calls:
   `ntfy.sh`. `set` sends a test message.
 - The message holds only: agent name, "wants a secret", and the link. The item name stays off the
   ntfy server; the page shows it **[R8]**.
-- **iOS caveat [R8]**: a self-hosted ntfy server can push to iOS only through
-  `upstream-base-url: "https://ntfy.sh"`. ntfy.sh then sees a hash of the message id, not the text.
-  The "refuse ntfy.sh" check applies to the `--url` the broker posts to, not to the server's
-  upstream setting. On Android, the ntfy app keeps its own connection, so no upstream is needed.
+- **iPhone with a self-hosted ntfy domain (chosen) [R8]**: iOS delivers pushes only through Apple's
+  push service, so your ntfy server needs `upstream-base-url: "https://ntfy.sh"` in its
+  `server.yml`. ntfy.sh then forwards only a "poll" signal with a hash of the message id. The ntfy
+  iOS app then fetches the message text from **your** server, so the phone must reach your ntfy
+  domain. The "refuse ntfy.sh" check applies to the `--url` the broker posts to, not to this
+  upstream setting. `broker doctor` reminds you of this setting, because the broker cannot read the
+  server's config.
+- The link in the push is `http://<broker tailnet IP or MagicDNS name>:<port>/a/<token>`. Safari
+  opens it; the Tailscale iOS app must be connected.
 
 ### 7. Vault
 
@@ -131,8 +137,10 @@ after 60 s or less, so there are two calls:
   with this account. The broker logs in as this account, never as your main account. Critical items
   are then not in the broker's vault at all, even if the broker is compromised. Vaultwarden supports
   organizations and collections without a licence.
-- Server: bitwarden.com, EU cloud, or self-hosted Vaultwarden / Bitwarden. A self-hosted server can
-  live on the tailnet only.
+- Server (chosen: both supported): **self-hosted Vaultwarden / Bitwarden** or **Bitwarden cloud**.
+  `bw config server <url>` selects it. A self-hosted server can live on the tailnet only. On
+  Bitwarden cloud, a free organization (2 users, 2 collections) is enough for you plus the agents
+  account. Tests run against Vaultwarden in Docker.
 - Prerequisite, once: `bw config server ...` and `bw login --apikey`, as the broker user, with the
   agents account's API key.
 - The master password the broker asks for is the **agents account's** master password, not yours.
@@ -159,7 +167,9 @@ field, and source IP. **Never** the value or the password.
 | `broker passwd` | Changes the approval password. |
 | `broker agent add NAME` | Shows the token once. Stores only its SHA-256 hash. |
 | `broker agent rm NAME` / `resume NAME` | Removes or un-suspends an agent. |
-| `broker net set --ip 100.x.y.z --approver-ip 100.a.b.c` | Tailnet bind address and phone IP. |
+| `broker approver set` | Lists tailnet peers from tailscaled; you pick the phone. Stores its node id and IP. |
+| `broker net set [--ip 100.x.y.z]` | Optional override; by default the tailnet IP comes from tailscaled (§13). |
+| `broker unlock` | Unlocks `bw` in a running broker (for Docker: `docker exec -it broker broker unlock`). |
 | `broker ntfy set --url --topic --token` | See §6. |
 | `broker start` | Unlocks `bw`, then serves. |
 | `broker doctor` | Checks file modes, the OS user, listeners, and approver IP **[R2]**. |
@@ -185,11 +195,12 @@ deploy/              systemd unit, sysusers.d entry
 
 ### 11. Milestones
 
-1. Vault adapter (agents account), pending map, agent API, `broker-get`, auto/ask with the `totp`
-   rule. Test with `curl`.
-2. Approval page, signed link, password check, approver-IP check, lockouts.
+1. Tailscale preflight, vault adapter (agents account), pending map, agent API, `broker-get`,
+   auto/ask with the `totp` rule. Test with `curl`.
+2. Approval page, signed link, password check, `whois` approver check, lockouts.
 3. ntfy, with the URL check and a short message body.
-4. Admin CLI, `doctor`, systemd unit with a separate user.
+4. Admin CLI, `doctor`, app mode (systemd unit, separate user), Docker mode (Compose with the
+   Tailscale sidecar), remote agents on the tailnet.
 5. Tests (§12).
 
 ### 12. Tests
@@ -204,22 +215,75 @@ deploy/              systemd unit, sysusers.d entry
 - Two items with the same name return 409.
 - `broker auto add` refuses `totp`; a `totp` request always asks.
 - An item outside the agents collection is not found (the broker's account cannot see it).
+- Preflight: the broker refuses to start with tailscaled stopped or logged out; the approver
+  listener closes when Tailscale goes down and opens again when it is back.
+- Approve from a remote agent's node fails; agent calls from an unregistered node fail.
+- Docker: the container starts locked and returns 503 until `broker unlock`.
+- Both vault servers: Vaultwarden in CI; Bitwarden cloud by hand before each release.
 - As the agent's OS user: cannot read the config, cannot read `/proc/<broker>/environ` or memory,
   cannot run `bw` with the broker's data.
 - The audit log never contains a value or a password (search the log for test values).
 
-### 13. Decision: `tailscale serve` for HTTPS?
+### 13. Tailscale (required)
 
-**Recommendation: no, not in v1.** Serve plain HTTP on the tailnet IP. WireGuard already encrypts it.
+The broker depends on Tailscale. There is no mode without it.
 
-Reason: `tailscale serve` forwards to a local port. Every request then arrives from `127.0.0.1`, so
-the approver-IP check [R1] stops working. And an agent on the same host could call that local port
-directly, past the check. The phone browser shows "Not secure" for plain HTTP; that is cosmetic
-here.
+**Preflight** (on `broker start`, in `broker doctor`, and every 30 s while running):
 
-If you add passkeys later, use Tailscale's Go library `tsnet` with `ListenTLS`. The broker becomes
-its own tailnet node with a `*.ts.net` certificate, and `WhoIs` gives the caller's node identity, a
-stronger check than its IP. It adds a large dependency, so it waits until it is needed.
+1. tailscaled's local API is reachable (`/var/run/tailscale/tailscaled.sock`, or the path in
+   `TS_SOCKET`). If not: exit with "Tailscale is not installed or not running".
+2. Backend state is `Running` (logged in, connected). If not: exit with "Tailscale is not
+   connected; run `tailscale up`".
+3. This node has a `100.x.y.z` address. The approver listener binds to it. `broker net set --ip`
+   can override it, but the address must still belong to this node.
+4. The configured phone node is in the peer list. If not: warn (the phone may be off), do not exit.
+
+While running, if Tailscale goes down or the node's IP changes, the broker closes the approver
+listener (fail closed). Pending requests then cannot be approved and end with 408. When Tailscale
+comes back, it opens the listener again. Every change is written to the audit log.
+
+**Who is calling**: for each approver call, the broker asks tailscaled `whois <remote addr>` and
+compares the node's stable id with the stored phone node. This is stronger than an IP check alone.
+
+**Tailnet ACL (recommended)**: allow only the phone to reach the broker's approver port, and only
+agent nodes to reach the agent port. This is a second check outside the broker.
+
+**No `tailscale serve`**: it forwards to a local port, so every request would appear to come from
+`127.0.0.1`. That breaks `whois` and the IP check, and an agent on the same host could call the
+local port directly. Plain HTTP on the tailnet IP is encrypted by WireGuard. If HTTPS is needed
+later (for passkeys), the broker gets a certificate with `tailscale cert` and serves TLS itself,
+which keeps the caller's real address.
+
+### 15. Deployment modes
+
+The broker can run on the same machine as the agent or on another one. Both are supported.
+
+**App mode** (native binary, systemd):
+- Runs as a separate `broker` user **[R2]**, using the host's tailscaled.
+- Agent on the same host: unix socket `/run/broker/agent.sock`, group `broker-clients`.
+- Unlock prompt on `broker start` in a terminal, or `systemd-ask-password`.
+
+**Docker mode** (Compose file in `deploy/docker/`):
+- A `tailscale/tailscale` sidecar is the broker's own tailnet node (`TS_AUTHKEY`, state volume).
+  The broker container uses `network_mode: service:tailscale` and shares its tailscaled socket
+  through a volume, so preflight and `whois` work the same as in app mode.
+- The container boundary takes the place of the separate user [R2]: non-root user, read-only root
+  filesystem, volumes only for config and `bw` data, no published ports by default.
+- The container starts **locked**. `/v1` returns 503 "broker locked" and the broker sends one push
+  until you run `docker exec -it broker broker unlock`.
+- **Anyone who can use Docker on that host is root [R17].** The agent's user must not be in the
+  `docker` group or see the Docker socket. `doctor` warns when the socket is world-readable.
+
+**Where the agent API listens**:
+
+| Agent runs | Agent API |
+|---|---|
+| Same host, app mode | Unix socket, group `broker-clients` |
+| Same host, broker in Docker | Unix socket in a bind-mounted directory, or a port published on `127.0.0.1` only |
+| Another machine | A second port on the tailnet IP. `broker agent add NAME --node <peer>` ties the token to that agent's node (checked with `whois`) |
+
+The agent port and the approver port are always separate listeners [R3]. An agent node can never
+approve.
 
 ### 14. Out of scope for v1
 
@@ -264,6 +328,10 @@ are in v2 in git history if needed later.
 - **R16. TOTP codes were treated like any other field.** With `auto`, an agent could get a TOTP code
   with no approval at all. Fix: `totp` is always ask, and getting both factors of one login is
   flagged.
+- **R17. Docker access is root access.** In Docker mode, an agent that can run `docker exec` owns
+  the broker. Fix: documented requirement, `doctor` warning.
+- **R18. Tailscale down.** If Tailscale stops, nothing can be approved. Fix: fail closed (408),
+  preflight on start, re-check every 30 s, audit lines.
 - **R8. ntfy and iOS.** Self-hosted ntfy reaches iOS only through ntfy.sh's upstream relay. The
   "refuse ntfy.sh" rule must not block that setup. Also, keep the item name out of the push text.
 
@@ -289,13 +357,14 @@ are in v2 in git history if needed later.
 - If you approve without reading the page, the broker cannot help.
 - A stolen, unlocked phone plus the password approves anything. The password is the defence.
 
-## Part 3: Open questions
+## Part 3: Decisions
 
-1. Agree with **no `tailscale serve`** in v1 (§13)?
-2. Keep `auto`, as in the original idea, but only from the broker config by item id (§5)? I
-   recommend yes, now that the agents account limits what auto can reach.
-3. Phone: iPhone or Android? This decides whether ntfy needs the ntfy.sh upstream (§6).
-4. Does the broker run on the same machine as the agent? The plan assumes yes. On a separate machine,
-   R2 goes away, and the agent API must move to the tailnet, also with an IP allowlist.
-5. Bitwarden server: bitwarden.com, EU cloud, or self-hosted Vaultwarden? Either works; self-hosted
-   gives free organizations for the agents collection.
+| # | Question | Decision |
+|---|---|---|
+| 1 | Tailscale | Required. The broker checks that tailscaled exists and is connected, and refuses to start otherwise (§13). No `tailscale serve`. |
+| 2 | `auto` items | Kept, from the broker config by item id only; never for `totp` (§5). |
+| 3 | Phone | iPhone, with a self-hosted ntfy domain and the ntfy.sh upstream for Apple push (§6). |
+| 4 | Same machine as the agent? | Either. App mode or Docker mode; local or remote agents (§15). |
+| 5 | Vault server | Self-hosted Vaultwarden / Bitwarden or Bitwarden cloud, both supported (§7). |
+
+No open questions block milestone 1.
