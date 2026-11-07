@@ -1,323 +1,244 @@
 # bw2fabroker: development plan
 
-Status: draft v2 (v1 plan, then the review in [Part 2](#part-2-review-what-v1-missed), with its fixes merged back into Part 1).
+Status: v3, the simplified plan, reviewed. It replaces v2 (in git history: grants, policy file,
+relay, passkeys, 1Password). Part 2 lists what the review found. Part 1 already includes the fixes,
+marked **[R#]**.
 Date: 2026-11-07
 
 ## Part 1: The plan
 
-### 1. Problem
+### 1. Summary
 
-Coding agents and scripts (Claude Code, CI-like local jobs, cron tasks) need secrets that live in a
-password manager: API keys, database passwords, SSH passphrases. Today there are two bad options:
+A small Go service. An agent asks for one Bitwarden item field. The broker sends a push to your phone.
+You open a link on the phone over the tailnet, see the request, and type your approval password.
+The broker reads the field with `bw` and gives it to the agent once.
 
-- **Unlock the vault for the agent.** Export `BW_SESSION`, or run `op signin`. The agent and every
-  child process can now read every item in the vault, silently, until the session ends.
-- **Copy secrets into `.env` files.** The secrets leave the vault, never rotate, and end up in logs,
-  shell history, and commits.
+The broker keeps no database. Pending requests live in memory only.
 
-bw2fabroker is a local **access broker**. It is the only process that holds an unlocked vault. A client
-asks it for one item. A human approves that request **on a second factor** (phone or security key).
-Then the broker releases only that value, for a limited time, and writes the event to an audit log.
+### 2. Rules
 
-### 2. Goals and non-goals
+- One approval = one secret. No grants. No deny rules.
+- Two factors: **your phone** on the tailnet (identified by its node, not just "any tailnet IP"
+  **[R1]**) and **your approval password**.
+- Single user. No sessions and no bearer keys on the approver side. The password is sent with each
+  approve call.
+- A restart cancels all pending requests. The agent gets an error.
+- The broker runs as its own OS user, not as the agent's user **[R2]**.
+- The approval password is separate from the Bitwarden master password. The master password is
+  never typed on the page.
 
-Goals:
+### 3. Agent API (unix socket or `127.0.0.1`, agent token required)
 
-1. Per-request human approval on a factor that the requesting process cannot reach.
-2. Least privilege: one item (or one field) per grant. No list or search of the vault by clients.
-3. Short-lived grants with a TTL and a use count.
-4. Policy file: auto-allow, require approval, or deny, per item/folder/collection and per client.
-5. Append-only audit log of each request, decision, and release.
-6. Backends: Bitwarden (`bw` CLI) first, 1Password (`op` CLI) second, behind one interface.
-7. Drop-in use: `bw2fa get <ref>`, `bw2fa run -- <cmd>` (env injection), `bw2fa inject` (template).
+HTTP long-poll. It is simpler than WebSocket and `curl` works with it. Agent tools often stop a call
+after 60 s or less, so there are two calls:
 
-Non-goals (v1):
+1. `POST /v1/requests` with `{item, field, reason}` returns `{id, expires_in: 120}` at once.
+2. `GET /v1/requests/{id}/wait` holds up to 50 s. The agent repeats it until it gets an answer.
 
-- Protection against root or a compromised kernel on the same host.
-- Write access to the vault (create, edit, delete items). Read only.
-- A multi-user or networked server. One human, one machine, local socket only.
-- Replacing Bitwarden Secrets Manager or 1Password service accounts for production workloads.
+| Reply | Meaning |
+|---|---|
+| 200 | The secret. Sent once, then erased from memory. |
+| 202 | Still pending, with `expires_in`. |
+| 403 | Denied. Final. |
+| 404 | Unknown id: the broker restarted, or the secret was already delivered. Final. **[R9]** |
+| 408 | Timeout. Final. |
+| 409 | Item name matches more than one item. Use the item id. Final. **[R5]** |
 
-### 3. Threat model
+- The agent must not make a new request before it sees a final reply. The final reply always comes
+  within 120 s.
+- One token per agent (`Authorization: Bearer <token>`). The broker stores only its hash and finds
+  the agent by token, not by any name the agent sends.
+- At most 5 pending requests **per agent** **[R11]**. After 3 denials in 10 minutes, the agent's token
+  is suspended until `broker agent resume NAME` **[R7]**.
+- The `/v1` routes exist only on the agent listener. The `/a` routes exist only on the tailnet
+  listener **[R3]**.
+- Helper `broker-get ITEM FIELD` runs the poll loop and prints the value.
+  `broker-get --env VAR ITEM FIELD -- CMD...` puts the value in `CMD`'s environment and does not
+  print it, so it does not land in the agent's transcript **[R10]**.
 
-| Actor | Can do | Must not be able to do |
-|---|---|---|
-| Agent / client process (same login user) | Ask for an item by reference; run commands | Read the vault, the broker's memory, its data dir, or the approval channel; approve its own request |
-| Prompt-injected agent | Ask for items it should not need; ask many times; craft misleading reasons | Get a value without a human seeing the **real** item name and requester |
-| Network attacker | See approval traffic on the relay | Forge or replay an approval; learn secret values (values never leave the host) |
-| Lost/stolen phone | Approve requests | Do so without the phone unlock (passkey user verification) |
-| Root on host | Everything | Out of scope; documented |
+### 4. Approver side (tailnet listener only)
 
-The key consequence: **the broker must not run as the same OS user as the agent.** A same-uid process
-can `ptrace` the broker, read `/proc/<pid>/environ` and memory, and read its files. See §5.
+- `GET /a/{token}`: page with agent name, item name **and item id**, field, folder, reason, and
+  time left. The reason is shown as plain text, labelled "agent's own words" **[R5]**. GET never
+  changes state.
+- `POST /a/{token}/approve`: needs the password.
+- `POST /a/{token}/deny`: no password. Deny is safe.
+- The token is the request id plus an expiry, signed with HMAC-SHA256. The broker stores nothing for
+  it. It checks the MAC in constant time and checks that the id is still pending.
+- 3 wrong passwords deny the request. 10 wrong passwords in an hour, across all requests, lock
+  approvals until `broker unlock-approvals` and send an alert **[R6]**.
+- Source check **[R1]**: the broker accepts approve and deny calls only from the phone's own
+  tailnet IP, set with `broker net set --approver-ip`. Tailscale IPs stay the same for a node. It
+  refuses its own host's tailnet IP, so an agent on the same machine cannot use the approver side.
+- Response headers: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
+  `X-Frame-Options: DENY`.
 
-### 4. Architecture
+### 5. `auto` items **[R4]**
 
-```
- client (agent uid)                 broker daemon (bw2fa uid)                 human
- ─────────────────                  ─────────────────────────                 ─────
- bw2fa get / run / inject
-        │  Unix socket (0660, group bw2fa-clients)
-        │  peer creds: uid, pid, exe, cmdline, cwd, parent chain
-        ▼
-   ┌────────────┐   ┌─────────┐   ┌───────────────┐   push / link    ┌──────────────┐
-   │ request    │──▶│ policy  │──▶│ approval      │ ───────────────▶ │ phone:       │
-   │ handler    │   │ engine  │   │ coordinator   │ ◀─────────────── │ passkey sign │
-   └────────────┘   └─────────┘   └───────────────┘  signed decision │ or TOTP      │
-        │                                 │                          └──────────────┘
-        ▼                                 ▼
-   ┌────────────┐   ┌─────────────────────────┐   ┌───────────┐
-   │ grant cache│   │ backend: bw serve / op  │   │ audit log │
-   │ (TTL, uses)│   │ (vault session in RAM)  │   │ (hash     │
-   └────────────┘   └─────────────────────────┘   │  chained) │
-                                                   └───────────┘
-```
+v1 has no `auto`. Every request asks. If you need it later, list the auto items **in the broker
+config by item id** (`broker auto add <item-id>`), not as a tag in the vault. Anyone who can edit a
+vault item, for example a member of a shared collection, could add a vault tag and widen access.
 
-Components:
+### 6. Notification (ntfy)
 
-- **Daemon `bw2fad`** (Go, single static binary). Runs as a dedicated user `bw2fa` under systemd
-  (Linux) or launchd (macOS). Hardening: `PR_SET_DUMPABLE=0`, `mlockall`, no core dumps,
-  `NoNewPrivileges`, `ProtectHome`, private `/tmp`.
-- **Client `bw2fa`** (same binary, different argv[0]/subcommand). Talks JSON over the Unix socket.
-- **Backend interface**:
-  ```go
-  type Backend interface {
-      Unlock(ctx context.Context, secret []byte) error
-      Lock(ctx context.Context) error
-      Status(ctx context.Context) (State, error)
-      Resolve(ctx context.Context, ref Ref) (ItemMeta, error) // name→id, no value
-      Read(ctx context.Context, ref Ref) (Value, error)       // one field
-      Sync(ctx context.Context) error
-  }
-  ```
-  - **Bitwarden**: the daemon runs `bw serve --hostname 127.0.0.1 --port <random>` as a child process
-    in its own network namespace or bound so that only the `bw2fa` user can reach it (see §5.3).
-    It does not use one `bw get` per request: each `bw` start takes about 1 s and puts
-    `BW_SESSION` in a child's environment.
-  - **1Password**: `op` with the desktop-app integration is tied to a GUI session and the agent's
-    user, so it does not fit. Use a **1Password service account** (`OP_SERVICE_ACCOUNT_TOKEN`) scoped
-    to an "agents" vault, or a 1Password Connect server. The broker adds the human approval that
-    service accounts lack.
-- **Approval coordinator**: sends the request to one or more approvers and waits for the first valid
-  decision, with a timeout (default 120 s, then deny).
-- **Policy engine**: TOML file, owned by `bw2fa`, not writable by clients.
-- **Audit log**: JSON Lines, each line holds the SHA-256 of the previous line. Values are never logged.
+- `broker ntfy set --url --topic --token`. The URL must be https **or** a tailnet address. It refuses
+  `ntfy.sh`. `set` sends a test message.
+- The message holds only: agent name, "wants a secret", and the link. The item name stays off the
+  ntfy server; the page shows it **[R8]**.
+- **iOS caveat [R8]**: a self-hosted ntfy server can push to iOS only through
+  `upstream-base-url: "https://ntfy.sh"`. ntfy.sh then sees a hash of the message id, not the text.
+  The "refuse ntfy.sh" check applies to the `--url` the broker posts to, not to the server's
+  upstream setting. On Android, the ntfy app keeps its own connection, so no upstream is needed.
 
-### 5. Key decisions
+### 7. Vault
 
-#### 5.1 Secret references
+- Prerequisite, once: `bw config server ...` and `bw login --apikey`, as the broker user.
+- `broker start` asks for the master password through a prompt the broker owns (its own TTY, or
+  `systemd-ask-password` when run as a service), runs `bw unlock --raw`, and keeps `BW_SESSION` in
+  memory only **[R12]**.
+- Each read runs `bw get item <id> --nointeraction` with `BW_SESSION` in that child's environment
+  only, then picks the field in Go. Name lookups use `bw list items --search`, and the broker
+  requires exactly one exact-name match **[R5]**.
+- `bw sync` on start and every 15 minutes **[R13]**.
+- No `bw serve`: it has no authentication and would expose the whole vault to every local process.
 
-`bw2fa://<backend>/<vault-or-collection>/<item>/<field>`, for example
-`bw2fa://bw/Personal/openai/api_key` or `bw2fa://op/agents/Postgres prod/password`.
+### 8. Audit log **[R14]**
 
-- Item lookup by name must be **unique**. If two items match, the request fails and asks for the id.
-  This stops an attacker who can add a shared item called `openai` from receiving the grant.
-- The approval prompt always shows the resolved **item id, full name, and folder**, not the string
-  the client sent.
+No database, but one JSON line per event to stderr (journald when run under systemd): request,
+notify, approve, deny, timeout, wrong password, delivered. Lines hold the agent name, item id,
+field, and source IP. **Never** the value or the password.
 
-#### 5.2 Approval channels (in priority order)
+### 9. Admin (CLI only, no web page)
 
-1. **Passkey approval page (default).** The broker sends a push (ntfy.sh, self-hosted ntfy, or
-   Pushover) that holds only a request id and a short URL. The phone opens the approval page,
-   which shows the request details. The human approves with a WebAuthn assertion. The challenge
-   is the SHA-256 of the canonical request (requester, item id, field, TTL, nonce). The broker
-   checks the signature with the public key that was registered at enrolment.
-   - Where does the page live? Options: (a) the broker serves it on the LAN over HTTPS with a
-     certificate pinned at enrolment; (b) a small relay (Cloudflare Worker + Durable Object) that
-     only forwards the signed request and the signed answer. The relay sees item names unless the
-     request is encrypted to a key held on the phone (see §5.4). v1 ships (b) with an encrypted
-     payload; (a) is the offline fallback.
-2. **TOTP on a broker-owned prompt.** The human types the 6-digit code into a prompt that the
-   *broker* draws (a pinentry-style GUI or `/dev/tty` of a separate terminal), **never** into the
-   agent's terminal. Enrolment stores the TOTP seed in the broker data dir. Used when the phone has
-   no network. Weaker: a code proves presence, not what was approved.
-3. **Hardware key touch (FIDO2 / YubiKey on the host)** via `libfido2`: the human touches the key
-   and the request is shown on the broker's own prompt. Good for desktops.
+| Command | Does |
+|---|---|
+| `broker init` | Writes config, random 32-byte HMAC key, asks for approval password (argon2id hash). |
+| `broker passwd` | Changes the approval password. |
+| `broker agent add NAME` | Shows the token once. Stores only its SHA-256 hash. |
+| `broker agent rm NAME` / `resume NAME` | Removes or un-suspends an agent. |
+| `broker net set --ip 100.x.y.z --approver-ip 100.a.b.c` | Tailnet bind address and phone IP. |
+| `broker ntfy set --url --topic --token` | See §6. |
+| `broker start` | Unlocks `bw`, then serves. |
+| `broker doctor` | Checks file modes, the OS user, listeners, and approver IP **[R2]**. |
 
-Not supported: approve by replying "yes" in a chat, by e-mail link without a signature, or by a
-code that the agent's terminal could see.
+Config: TOML, mode `0600`, owned by the broker user, in a directory the agent's user cannot read.
 
-#### 5.3 Vault unlock
+### 10. Go stack and layout
 
-- The master password is entered **once per boot** through the broker's own prompt
-  (`bw2fa unlock` opens a pinentry owned by the `bw2fa` user), or comes from the OS keyring of the
-  `bw2fa` user (opt-in, documented as weaker).
-- For Bitwarden, log in with the API key (`BW_CLIENTID` / `BW_CLIENTSECRET`). This avoids the
-  account's own 2FA at each login. Unlock still needs the master password.
-- `bw serve` has no authentication. Anything that can reach its port can read the whole vault.
-  Bind it only where the agent user cannot connect: a private network namespace
-  (`unshare -n` / systemd `PrivateNetwork=yes` with the daemon talking to it in the same
-  namespace). macOS has no network namespaces, and any local user can reach a `localhost` port,
-  so on macOS the broker does **not** run `bw serve`. It runs `bw get item <id>` per request as
-  the `bw2fa` user, with `BW_SESSION` in that child's environment (other users cannot read it).
-  This costs about 1 s per request, but each request needs a human approval anyway.
-  **This is a release blocker on every platform.**
-- Auto-lock after N minutes with no grants (default 60) and on screen lock / suspend (logind /
-  `NSWorkspace` notifications).
-
-#### 5.4 Confidentiality of the request on the relay
-
-The phone app or PWA generates an X25519 key at enrolment. The broker encrypts each request body
-(item name, requester, reason) to it. The relay sees only: request id, timestamps, ciphertext. The
-signed answer binds the request hash, so the relay cannot change what was approved.
-
-#### 5.5 Release modes
-
-| Mode | What the client gets | Notes |
-|---|---|---|
-| `get` | value on stdout | Simple; value can end up in agent context/logs. Warn. |
-| `run -- cmd` | value in the child's env only; the client process never prints it | Preferred for agents. Still visible in `/proc/<child>/environ` to the same uid. |
-| `inject -i tpl -o file` | file written 0600 | For config files. Optional delete after N s. |
-| `ssh-agent` (v2) | signing only, key never released | Best for SSH keys. |
-
-**Output masking**: in `run` mode, the client replaces released values in the child's
-stdout/stderr with `****` (exact and base64 forms), so that values do not flow back into the
-agent's context.
-
-#### 5.6 Policy file (example)
-
-```toml
-default = "approve"          # approve | allow | deny
-grant_ttl = "15m"
-max_uses = 1
-
-[[rule]]
-match = { backend = "bw", folder = "agents/dev" }
-clients = ["claude", "node", "python3"]   # matched on resolved exe path hash, not argv[0]
-action = "allow"
-grant_ttl = "8h"
-max_uses = 100
-
-[[rule]]
-match = { folder = "banking" }
-action = "deny"
-
-[[rule]]
-match = { item_id = "6f1c…" }
-action = "approve"
-approvers = 2               # m-of-n: two different enrolled devices
-```
-
-Rate limit for each client: default 10 requests per 10 minutes. After 3 denials in a row, refuse new
-requests from that client tree for 15 minutes and send one "flood" alert. Without this, an agent
-can wear the human down with many prompts ("approval fatigue").
-
-### 6. Milestones
-
-| # | Scope | Exit criteria |
-|---|---|---|
-| M0 | Spike: `bw serve` in a private netns; Go client to `/object/item/{id}`; WebAuthn signing on a phone through a static page | Spike notes in `docs/spikes/`; latency measured |
-| M1 | Daemon, socket, peer creds, Bitwarden backend, TOTP approval on a broker prompt, `get`/`run`, audit log, policy allow/deny/approve | E2E test on Linux: agent user gets one item after TOTP; same-uid attack tests (§8) fail to read vault |
-| M2 | Passkey approval: enrolment, relay (Worker), encrypted payload, push via ntfy, m-of-n | Approve from iPhone and Android; replay and tamper tests pass |
-| M3 | 1Password backend (service account), `inject`, output masking, rate limit, auto-lock | Same E2E suite passes for both backends |
-| M4 | macOS (launchd, separate user, per-request `bw get` backend), packaging (Homebrew, .deb), `bw2fa doctor` | Install-to-first-approval in under 10 minutes on a clean machine |
-| M5 | Hardening and review: fuzz the socket protocol, external review, threat-model update | No open high findings |
-| Later | `ssh-agent` mode, MCP server front end for agents, Windows (named pipe, separate account), Bitwarden Secrets Manager backend | — |
-
-### 7. Repository layout
+`net/http`, `golang.org/x/crypto/argon2`, `crypto/hmac`, `os/exec` for `bw`,
+`github.com/BurntSushi/toml`. No database.
 
 ```
-cmd/bw2fa/            client + daemon entry (subcommands)
-internal/broker/      request handling, grants
-internal/policy/
-internal/approval/    totp, webauthn, fido2, relay client
-internal/backend/bw/  bw serve supervisor + HTTP client
-internal/backend/op/
-internal/audit/
-internal/peer/        SO_PEERCRED / LOCAL_PEERPID, process tree
-relay/                Cloudflare Worker (TypeScript)
-approve-pwa/          phone approval page (static, WebAuthn)
-deploy/               systemd units, launchd plist, sysusers.d
-docs/                 this plan, threat model, ADRs, spikes
-test/e2e/             multi-user test harness (containers)
+cmd/broker/          admin CLI + server
+cmd/broker-get/      agent helper
+internal/config/
+internal/api/        agent listener (/v1) and approver listener (/a)
+internal/vault/      bw adapter
+internal/notify/     ntfy
+internal/pending/    in-memory map, expiry, wake-up of waiters
+internal/auth/       argon2id, HMAC links, agent tokens, lockout counters
+deploy/              systemd unit, sysusers.d entry
 ```
 
-### 8. Test plan
+### 11. Milestones
 
-- **Unit**: policy matching, grant TTL/uses, canonical request hashing, audit chain checks.
-- **Protocol fuzzing** of the socket JSON (`go test -fuzz`).
-- **Same-uid attack suite** (run as the agent user, each must fail):
-  read the broker data dir; `ptrace`/`/proc/<pid>/mem` of the daemon and of `bw serve`;
-  connect to the `bw serve` port; read `BW_SESSION` from any environ; replay an old approval;
-  approve with a signature over a different request; substitute an item with the same name.
-- **E2E** in containers with two users and a fake approver (software WebAuthn authenticator).
-- **Backend contract tests** against a local Vaultwarden for Bitwarden, and a recorded fixture for
-  `op`.
-- **Manual**: real iPhone and Android approvals before each release.
+1. Vault adapter, pending map, agent API, `broker-get`. Test with `curl`.
+2. Approval page, signed link, password check, approver-IP check, lockouts.
+3. ntfy, with the URL check and a short message body.
+4. Admin CLI, `doctor`, systemd unit with a separate user.
+5. Tests (§12).
+
+### 12. Tests
+
+- Timeout reaches 408 at 120 s; a waiter that joins late still gets the final answer.
+- Double approve: the second call fails, and the secret is delivered once.
+- Wrong password ×3 denies; ×10 across requests locks approvals.
+- Restart: pending ids return 404 to the agent.
+- Approve from the broker host's own tailnet IP fails. Approve from a third tailnet node fails.
+- `/a` routes are absent on the agent listener, and `/v1` routes on the tailnet listener.
+- Tampered or expired link fails. A link for request A cannot approve request B.
+- Two items with the same name return 409.
+- As the agent's OS user: cannot read the config, cannot read `/proc/<broker>/environ` or memory,
+  cannot run `bw` with the broker's data.
+- The audit log never contains a value or a password (search the log for test values).
+
+### 13. Decision: `tailscale serve` for HTTPS?
+
+**Recommendation: no, not in v1.** Serve plain HTTP on the tailnet IP. WireGuard already encrypts it.
+
+Reason: `tailscale serve` forwards to a local port. Every request then arrives from `127.0.0.1`, so
+the approver-IP check [R1] stops working. And an agent on the same host could call that local port
+directly, past the check. The phone browser shows "Not secure" for plain HTTP; that is cosmetic
+here.
+
+If you add passkeys later, use Tailscale's Go library `tsnet` with `ListenTLS`. The broker becomes
+its own tailnet node with a `*.ts.net` certificate, and `WhoIs` gives the caller's node identity, a
+stronger check than its IP. It adds a large dependency, so it waits until it is needed.
+
+### 14. Out of scope for v1
+
+1Password, multi-user, grants, policy files, passkeys, Windows, macOS service setup. All of these
+are in v2 in git history if needed later.
 
 ---
 
-## Part 2: Review (what v1 missed)
+## Part 2: Review of the simplified plan
 
-The first draft was a "daemon + TOTP + `bw get`" design. A hostile review found these gaps. Each one
-is now fixed in Part 1, or is an open question in Part 3.
+### Blockers
 
-### Blockers (the design was insecure without them)
+- **R1. "Any tailnet IP" is not your phone.** If the agent's machine is on the tailnet (it is: the
+  broker binds there), the agent can call the approver side from the host's own tailnet IP. So would
+  any other node, or a node shared into your tailnet. The phone factor was really "any tailnet
+  device". Fix: allow only the phone's IP, and refuse the host's own IP.
+- **R2. Same OS user as the agent.** The plan does not say which user runs the broker. If it is the
+  agent's user, the agent can read the config (HMAC key, password hash), read `BW_SESSION` from
+  `/proc/<pid>/environ` of a running `bw`, attach a debugger, or use `bw`'s data dir directly. Both
+  factors are then bypassed. Fix: a separate `broker` user, and `doctor` checks it.
+- **R3. One listener for both APIs.** If `/a` were reachable on `127.0.0.1`, the agent could reach
+  the approver side, and the IP check would see `127.0.0.1`. Fix: two listeners, two route sets.
 
-1. **Same-uid broker = no boundary.** v1 ran the daemon as the login user. Any agent process could
-   `ptrace` it or read `BW_SESSION` from `/proc`. → Dedicated `bw2fa` user, `PR_SET_DUMPABLE=0`,
-   attack suite (§3, §4, §8).
-2. **`bw serve` has no auth.** v1 used it on `localhost`. Every local process could read the full
-   vault, with no approval at all. → Private network namespace on Linux, per-request `bw get` on macOS; release blocker (§5.3).
-3. **2FA code typed where the agent can see it.** v1 asked for the TOTP code in the agent's
-   terminal. The agent can read the screen, or trick the human into typing the code into its own
-   prompt. → Broker-owned prompt only; passkey is the default (§5.2).
-4. **Approval did not bind to the request.** A TOTP code says "a human is here", not "the human
-   approved item X for process Y". → WebAuthn challenge = hash of the canonical request (§5.2).
-5. **Name-based lookup is spoofable.** `bw get item openai` returns the first match. A shared
-   collection member could plant a look-alike. → Unique resolution, id shown in the prompt (§5.1).
+### Major
 
-### Major gaps
+- **R4. `agent_access=auto` is set in the vault.** A vault field is not a safe place for a security
+  setting. Anyone who can edit the item can set it, and then there is no approval at all. Fix: drop
+  it for v1; if needed, list item ids in the broker config.
+- **R5. Name lookup and the reason text.** `bw get item NAME` returns the first match, so a
+  look-alike item could be released. The reason is text the agent writes, so a prompt-injected agent
+  can write a convincing one. Fix: require one exact match (409 otherwise), and show the item id and
+  folder resolved by the broker.
+- **R6. Password guessing.** 3 tries per request, but an attacker with access to the approver
+  side can try 3 on each new request. Argon2id slows it down; a global limit stops it.
+- **R7. Approval fatigue.** The 5-pending cap limits parallel requests, not a stream of them. Fix:
+  suspend the agent after 3 denials in 10 minutes.
+- **R8. ntfy and iOS.** Self-hosted ntfy reaches iOS only through ntfy.sh's upstream relay. The
+  "refuse ntfy.sh" rule must not block that setup. Also, keep the item name out of the push text.
 
-6. **Approval fatigue / prompt flooding.** No rate limit. → Rate limits, denial lockout (§5.6).
-7. **Released value leaks back into agent context.** `get` prints to stdout, which the agent
-   stores in its transcript (and may send to its model provider). → `run` mode as default plus
-   output masking; documented warning (§5.5).
-8. **Requester identity was the client's own claim.** → Peer credentials from the kernel, exe path
-   and hash, parent chain shown to the approver (§4).
-9. **1Password `op` desktop integration does not work for a separate daemon user.** → Service
-   account / Connect (§4).
-10. **Relay sees secret names and requester details.** → Encrypt payload to phone key (§5.4).
-11. **No lock policy.** The vault stayed unlocked forever. → Idle, screen lock, and suspend lock (§5.3).
-12. **No enrolment / recovery story.** What if the phone is lost? → See Part 3, Q3; v1 adds
-    `bw2fa enroll`, `bw2fa devices revoke`, and a printed recovery code that only resets
-    approvers and needs the master password.
+### Minor
 
-### Minor gaps
+- **R9. Restart and lost replies.** After a restart, the agent's next `wait` gets 404, which must be
+  final. If the 200 reply is lost in transit, the secret is gone and the agent needs a new approval.
+  This is accepted and documented.
+- **R10. Secret in the agent transcript.** `broker-get ITEM FIELD` prints the value, so it goes into
+  the agent's context and to its model provider. `--env VAR -- CMD` avoids that.
+- **R11. "Maximum 5 pending" was not scoped.** Now: per agent.
+- **R12. Where the master password is typed.** `broker start` in a terminal that the agent can see
+  (shared tmux or herdr pane) leaks it. Use the broker's own TTY or `systemd-ask-password`.
+- **R13. Stale vault.** Without `bw sync`, new or changed items are not found.
+- **R14. No audit at all.** "No database" does not need to mean no log. A JSON line per event to
+  journald costs almost nothing.
 
-13. Audit log could be edited by the agent user. → Owned by `bw2fa`, hash-chained; optional
-    forward to syslog/journald.
-14. Bitwarden data goes stale: v1 never ran `bw sync`. → Sync on unlock and every 15 min, and on
-    "item not found" once.
-15. Clock skew breaks TOTP and grant TTL checks. → Use monotonic time for TTL; TOTP window ±1 step.
-16. Secrets in Go strings cannot be wiped. → `[]byte` with explicit zeroing in the hot path; no
-    claim of perfect memory hygiene in the docs.
-17. No `doctor` command: setup with a second user, groups, and namespaces is easy to get wrong.
-    → `bw2fa doctor` checks each boundary from §8 and prints a fix.
-18. Licence and naming: the project calls `bw` and `op`; no Bitwarden or 1Password code or
-    branding is included. Pick a licence before first release (Part 3, Q6).
+### Accepted risks
 
-### Accepted risks (stated, not fixed)
+- Root on the broker host can read everything.
+- After `--env` release, any process of the agent's user can read the child's environment while it
+  runs.
+- If you approve without reading the page, the broker cannot help.
+- A stolen, unlocked phone plus the password approves anything. The password is the defence.
 
-- Root on the host can read everything.
-- After `run` releases a value, any same-uid process can read the child's environment while it runs.
-  The grant limits which value and for how long; it cannot stop this.
-- A human who approves without reading the prompt defeats the system. The prompt design (item id,
-  folder, requester exe, reason, "first time this client asks for this item" marker) is the only
-  defence.
+## Part 3: Open questions
 
----
-
-## Part 3: Open questions for the owner
-
-1. **Platforms for v1**: Linux only, or Linux + macOS? (macOS needs the separate-user setup and a
-   per-request `bw get` backend; it adds about one milestone.)
-2. **Approval device**: iPhone, Android, or both? A PWA with passkeys covers both, but iOS web push
-   needs the PWA installed to the home screen. A native iOS app (shared code with Heeler?) gives
-   better push but costs more.
-3. **Lost-phone recovery**: recovery code (proposed), a second enrolled device, or both required?
-4. **Relay hosting**: Cloudflare Worker on your account (proposed), self-hosted ntfy, or LAN-only?
-5. **Primary clients**: Claude Code only (then an MCP server front end moves up to M3), or any CLI?
-6. **Licence**: MIT, Apache-2.0, or private?
-7. **Bitwarden server**: bitwarden.com, EU cloud, or self-hosted Vaultwarden? (Affects tests and
-   API-key login.)
+1. Agree with **no `tailscale serve`** in v1 (§13)?
+2. Drop `auto` for v1 (§5)? I recommend yes.
+3. Phone: iPhone or Android? This decides whether ntfy needs the ntfy.sh upstream (§6).
+4. Does the broker run on the same machine as the agent? The plan assumes yes. On a separate machine,
+   R2 goes away, and the agent API must move to the tailnet, also with an IP allowlist.
