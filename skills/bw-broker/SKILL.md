@@ -29,10 +29,12 @@ broker-get "openai" password --reason "set OPENAI_API_KEY for local test"
 ```
 
 - `ITEM`: the item id (preferred) or the exact item name.
-- `FIELD`: one of `username`, `password`, `totp`, `uri`, `custom:<name>`. Notes and attachments
-  are not available. Do not ask for them.
+- `FIELD`: `username`, `password`, `totp`, `uri`, `notes`, `custom:<name>`, `card:number` (also `cardholder`, `brand`, `exp_month`, `exp_year`, `code`), `identity:<part>` (`first_name`, `last_name`, `email`, `phone`, and the other identity parts), or `attachment:<file>`.
+
 - `--reason`: required. One line, at most 120 characters, no URLs. Say plainly what you will do with
   the secret. The user reads it before approving. It must be true.
+
+To see names before asking, run `broker-get list` or `broker-get search TEXT`. That output is names and field names only. Then ask for one field with `--reason`.
 
 `broker-get` waits for the answer (up to about 2 minutes). Do not run it in the background or start
 a second request while one is waiting.
@@ -85,7 +87,7 @@ error, stop, and tell the user.
 
 - `BROKER_TOKEN` (or `BROKER_TOKEN_FILE`) holds your agent token. Never print it or pass it to other
   tools; `broker-get --env` already keeps it from the command it runs.
-- `BROKER_URL` points at the broker, for example `unix:/run/bw2fabroker/agent.sock`.
+- `BROKER_URL` is the agent HTTP API, for example `http://100.x.y.z:8786`.
 
 If either is missing, tell the user. Do not search for a token.
 

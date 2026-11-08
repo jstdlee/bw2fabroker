@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -72,9 +73,41 @@ func TestSendAndNoRedirect(t *testing.T) {
 	}))
 	defer redir.Close()
 	ru, _ := url.Parse(redir.URL)
-	n2, _ := New(redir.URL, ru.Hostname(), "approvals", "")
+	n2, _ := New(redir.URL, ru.Hostname(), "approvals", "tk")
 	n2.Client.Transport = redir.Client().Transport
 	if err := n2.Send(context.Background(), Message{Body: "x"}); err == nil {
 		t.Fatal("redirect was followed or accepted")
+	}
+}
+
+func TestRejectPublicChannel(t *testing.T) {
+	pub := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}))
+	defer pub.Close()
+	u, _ := url.Parse(pub.URL)
+	n, err := New(pub.URL, u.Hostname(), "approvals", "tk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.Client.Transport = pub.Client().Transport
+	if err := n.RequireAuth(context.Background()); !errors.Is(err, ErrPublicChannel) {
+		t.Fatal(err)
+	}
+	priv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+	}))
+	defer priv.Close()
+	pu, _ := url.Parse(priv.URL)
+	n, _ = New(priv.URL, pu.Hostname(), "approvals", "tk")
+	n.Client.Transport = priv.Client().Transport
+	if err := n.RequireAuth(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

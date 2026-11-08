@@ -12,7 +12,7 @@ Environment=BROKER_CONFIG=/etc/bw2fabroker/config.toml
 Environment=HOME=/var/lib/bw2fabroker
 Environment=BITWARDENCLI_APPDATA_DIR=/var/lib/bw2fabroker/bw
 ExecStart=/usr/local/bin/broker start
-Restart=on-failure
+Restart=always
 RestartSec=10
 
 # /run/bw2fabroker holds admin.sock (0600, broker only) and agent.sock (0660, group broker-clients).

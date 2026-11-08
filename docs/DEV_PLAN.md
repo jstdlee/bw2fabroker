@@ -59,7 +59,7 @@ calls:
 - One token per agent (`Authorization: Bearer <token>`). The broker stores only its hash and names
   the agent from the token, never from anything the agent sends.
 - At most 5 pending requests per agent. After 3 denials in 10 minutes, the agent's token is
-  suspended until `broker agent resume NAME` **[R7]**.
+  suspended until the admin panel resumes it **[R7]**.
 - `/v1` routes exist only on the agent listener; `/a` routes exist only on the approver listener
   **[R3]**.
 
@@ -143,16 +143,16 @@ fixed codes) and turns anything else into `rejected` / `internal_error`:
 ### 6. Policy: `auto` and `ask`
 
 - Default for every item: **ask**.
-- `broker auto add <item-id> [--field F]` marks an item as **auto**: returned at once with
+- An auto rule in the admin panel marks an item as **auto**: returned at once with
   `code: "auto"`, an audit line, and an informational push. The list is in the broker config by item
   id, never as a tag in the vault **[R4]**.
-- The **`totp` field is never auto**; `broker auto add` refuses it **[R16]**. A request for
+- The **`totp` field is never auto**; the admin panel refuses it **[R16]**. A request for
   `password` and `totp` of the same item within 10 minutes is flagged on the approval page.
 
 ### 7. Notification: own ntfy domain only **[R20]**
 
-- `broker ntfy set --url https://ntfy.example.com --topic T --token K`.
-- The broker **enforces** the domain, at `set` and before every send:
+- The admin panel saves the ntfy URL, topic, and bearer token.
+- The broker **enforces** the domain, when that is saved and before every send:
   - scheme must be `https`;
   - host must equal the configured own domain (`ntfy.own_domain` in the config, set once at
     `broker init`);
@@ -223,20 +223,16 @@ preflight. Non-root user, read-only root filesystem, volumes for config and `bw`
 **locked** (`rejected` / `locked`) until `docker exec -it broker broker unlock`. The agent's user
 must not have Docker access, because Docker access is root **[R17]**.
 
-### 12. Admin (CLI only)
+### 12. Admin (loopback panel)
 
-| Command | Does |
-|---|---|
-| `broker init` | Config, random 32-byte HMAC key, approval password (argon2id), ntfy own domain. |
-| `broker passwd` | Changes the approval password. |
-| `broker agent add NAME` | Shows the token once; stores its SHA-256 hash. |
-| `broker agent rm NAME` / `resume NAME` | Removes or un-suspends an agent. |
-| `broker auto add/rm <item-id> [--field F]` | Auto list (§6). |
-| `broker ntfy set --url --topic --token` | Checked against the own domain (§7). |
-| `broker net set [--ip]` | Optional bind override (§10). |
-| `broker start` / `broker unlock` | Preflight, unlock `bw`, serve. |
-| `broker unlock-approvals` | Clears the password lockout. |
-| `broker doctor` | Tailscale, ntfy domain, file modes, OS user or container, listeners. |
+The broker CLI does not administer the broker. `broker init` writes the config, an argon2id approval
+password, the HMAC key, and a loopback admin token (printed once, `admin.server` = `127.0.0.1:8788`).
+`broker start`, `unlock`, `unlock-approvals`, `status`, and `doctor` are the only other commands.
+
+The panel, and only the panel, changes the approval password, ntfy settings, bind address, agent
+HTTP listen address, agents, auto rules, and authenticator enrollment, and resumes a suspended agent.
+It does not run arbitrary `bw` commands. It answers only on loopback. The admin token is not an
+agent access token.
 
 Config: TOML, mode `0600`, owned by the broker user.
 
@@ -386,42 +382,58 @@ service setup, Bitwarden Secrets Manager.
 
 No open questions block milestone 1.
 
-## Implementation notes (2026-11-07)
+## Progress and gaps (2026-11-08)
 
-What was built, and where it differs in detail from the plan above:
+### Done
 
-- **Code**: `cmd/broker` (server + admin CLI), `cmd/broker-get`, and `internal/{contract, auth,
-  config, notify, tailscale, vault, pending, api}` as in §14. Go 1.24, dependencies:
-  `BurntSushi/toml`, `x/crypto/argon2`, `x/term`.
-- **Admin socket**: `broker unlock`, `unlock-approvals`, `agent resume`, and `status` reach the
-  running broker through a unix socket of mode 0600 (`admin.sock`), so only the broker user or root
-  can use them.
-- **Config reload**: the running broker reloads the config file when it changes, so `agent add`,
-  `passwd`, and `auto` take effect without a restart. A broken file keeps the last good config.
-- **Extra limit**: at most 20 new requests per agent per 10 minutes (`rate_limited`), in addition
-  to 5 pending.
-- **Approver range check**: the approver listener binds only to the tailnet IP and answers only
-  callers with a Tailscale address (100.64.0.0/10 or fd7a:115c:a1e0::/48). This is a range check,
-  not a device check (owner decision in §10).
-- **Field check before asking**: the broker checks that the field exists before it sends the push,
-  so you are not asked to approve a field that is missing (`field_not_allowed`).
-- **`internal_error`** was added to the rejected codes for unexpected failures and recovered panics.
-- **Docker**: `Dockerfile` (Bitwarden CLI 2026.10.0 on Node 22, uid 10001) and
-  `deploy/docker/compose.yml` with a `tailscale/tailscale` sidecar in kernel networking mode, so the
-  broker can bind the tailnet IP.
-- **App mode**: `deploy/systemd/bw2fabroker.service` (hardened unit) and a sysusers entry for the
-  `broker` user and `broker-clients` group.
+- The server commands are `init`, `start`, `demo`, `unlock`, `unlock-approvals`, `status`,
+  `doctor`, and `version`. `passwd`, `ntfy`, `net`, `agent`, `auto`, `admin-token`, and `2fa`
+  exit with an error and do not change anything.
+- Administration is the loopback panel at `127.0.0.1:8788/admin`. It sets the approval password,
+  the approver bind, the agent HTTP listen address, ntfy, agents (add, remove, resume), auto
+  rules, authenticator enrollment and item tags, a name-only vault search, and admin-token
+  rotation. It does not run arbitrary `bw` commands.
+- Agents call HTTP with a bearer token. There is no agent unix socket. A config where the admin
+  token hash equals an agent token hash is refused, and each API rejects the other token.
+- The running broker reloads the config file when the panel writes it. A broken file keeps the
+  last good config. The approval address updates within 30 seconds. The agent listen address
+  needs a process restart.
+- The admin unix socket stays mode 0600 and is only for `unlock`, `unlock-approvals`, and
+  `status`.
+- The contract also allows `notes`, `card:<part>`, `identity:<part>`, and `attachment:<file>`.
+- The audit log is `audit.jsonl` next to the config (seven days) and one JSON line on stderr.
+  It does not hold a value or a password.
+- `broker demo` serves a fake vault on localhost, with the same approval page.
+- `go test -tags e2e ./e2e` starts Vaultwarden in Docker, registers an account in the current
+  master-password unlock shape, logs in with `bw` 2026.10.0, and reads one field through the
+  broker's vault adapter. The test refuses to run if that would touch a production `data.json`.
+- `go test ./...` covers the contract, the handlers, admin and agent token separation, the ntfy
+  domain checks, and the vault adapter against a fake `bw`.
 
-Verified:
+### Gaps
 
-- Unit and handler tests with the race detector (`make test`), including every item in §16 that does
-  not need a real Bitwarden server or a phone.
-- End to end with the real binaries: fake tailscaled local API, a fake `bw` script, a local HTTPS ntfy
-  server on its own domain, and a tailnet test address on loopback: init, ntfy domain refusals, agent
-  add, doctor, start locked, unlock, approve after a wrong password, `--env` mode, deny,
-  rejections, Tailscale down/up, refusal to start with Tailscale stopped, no secret in any log.
-- The Docker image builds and runs as a non-root user with `bw` 2026.10.0.
+- No test runs the phone path: agent request, own-domain ntfy push, tailnet approval page, one
+  value returned. The disposable-vault test stops at `bw` login and one field read.
+- Vaultwarden is a local Docker test, not a CI job. Bitwarden cloud is still a manual check
+  before a release (§16).
+- `notes`, `card`, `identity`, and `attachment` are in the contract and the adapter. They are
+  not in the disposable-vault test.
+- The admin panel has handler tests for token separation, not a browser pass.
+- The systemd unit and the compose Tailscale sidecar are documented and not what this host
+  runs. This host uses host networking and the host `tailscaled` socket.
+- §16's check that the agent's OS user cannot read the config or the broker's memory is a
+  deployment check, not a test.
+- After the agent listener moves off the unix socket, old clients must set `BROKER_URL` to the
+  tailnet HTTP address, and a restarted broker stays locked until `broker unlock`.
 
-Not yet verified: a real Bitwarden or Vaultwarden server (the `bw` adapter is tested against a
-script that mimics `bw`'s JSON output), a real iPhone and ntfy server, the systemd unit on a real
-host, and the compose file with a real Tailscale auth key.
+### This host
+
+Recorded here so the next session does not rediscover it. None of these values are in git.
+
+- The image was rebuilt from this tree. The container has no `BROKER_TOKEN_FILE` and no CLI that
+  can mint an agent token.
+- The host config (outside this repo) binds the agent API to the tailnet address instead of
+  `unix:/data/run/agent.sock`.
+- That process is locked until `docker exec -it bw2fabroker broker unlock`.
+- The ntfy user's password was changed on the ntfy server. The broker still sends with the
+  bearer token already in its config, and that token still gets HTTP 200.

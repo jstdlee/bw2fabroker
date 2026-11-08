@@ -32,9 +32,11 @@ input[type=password]{width:100%;box-sizing:border-box;font-size:18px;padding:10p
 button{font-size:18px;padding:12px;border-radius:8px;border:0;width:100%;margin-bottom:10px;color:#fff}
 .approve{background:var(--ok)}.deny{background:var(--no)}
 .status{font-size:18px;font-weight:600}
+.demo{border:1px solid var(--line);border-radius:8px;padding:8px;margin:0 0 12px}
 </style></head><body>
 {{if .Pending}}
 <h1>Approve one secret?</h1>
+{{if .Demo}}<p class="demo">Demo on this machine. Not your Bitwarden vault. Use the approval password printed when <code>broker demo</code> started.</p>{{end}}
 <dl>
 <dt>Agent</dt><dd>{{.Agent}}</dd>
 <dt>Item</dt><dd>{{.ItemName}}</dd>
@@ -48,6 +50,8 @@ button{font-size:18px;padding:12px;border-radius:8px;border:0;width:100%;margin-
 <form method="post" action="{{.Base}}/approve" autocomplete="off">
 <label for="pw">Approval password</label>
 <input id="pw" name="password" type="password" autocomplete="off" required autofocus>
+{{if .Need2FA}}<label for="code">Authenticator code</label>
+<input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required>{{end}}
 <button class="approve" type="submit">Approve</button>
 </form>
 <form method="post" action="{{.Base}}/deny"><button class="deny" type="submit">Deny</button></form>
@@ -62,7 +66,7 @@ type pageData struct {
 	Pending                                bool
 	Agent, ItemName, ItemID, Folder, Field string
 	Reason, Base, Message                  string
-	IsTOTP                                 bool
+	IsTOTP, Demo, Need2FA                  bool
 	SecondsLeft                            int
 }
 
@@ -91,7 +95,7 @@ func (s *Server) ApproverHandler() http.Handler {
 				s.message(w, http.StatusInternalServerError, "Internal error.")
 			}
 		}()
-		if !remoteIsTailnet(r) {
+		if !s.callerMayApprove(r) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -121,6 +125,8 @@ func (s *Server) serveApprover(w http.ResponseWriter, r *http.Request) {
 		s.showRequest(w, id, base, "")
 	case action == "approve" && r.Method == http.MethodPost:
 		s.approve(w, r, id, base)
+	case action == "callback" && r.Method == http.MethodPost:
+		s.showRequest(w, id, base, "Open this page and type the approval password. A notification button cannot approve by itself.")
 	case action == "deny" && r.Method == http.MethodPost:
 		s.deny(w, id)
 	default:
@@ -157,8 +163,8 @@ func (s *Server) showRequest(w http.ResponseWriter, id, base, msg string) {
 		left = n
 	}
 	s.render(w, http.StatusOK, pageData{
-		Pending: true, Agent: v.Agent, ItemName: v.Item.Name, ItemID: v.Item.ID, Folder: v.Item.Folder,
-		Field: v.Field.String(), IsTOTP: v.Field.Kind == "totp", Reason: v.Reason, Base: base,
+		Pending: true, Demo: s.AllowLoopback, Agent: v.Agent, ItemName: v.Item.Name, ItemID: v.Item.ID, Folder: v.Item.Folder,
+		Field: v.Field.String(), IsTOTP: v.Field.Kind == "totp", Need2FA: s.Config().Requires2FA(v.Item.ID), Reason: v.Reason, Base: base,
 		SecondsLeft: max(left, 0), Message: msg,
 	})
 }
@@ -186,6 +192,14 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request, id, base string
 		}
 		s.showRequest(w, id, base, "Wrong password.")
 		return
+	}
+	if s.Config().Requires2FA(v.Item.ID) {
+		secret := s.Config().TwoFA.Secret
+		code := strings.TrimSpace(r.PostForm.Get("code"))
+		if secret == "" || !auth.VerifyTOTP(secret, code, s.Now()) {
+			s.showRequest(w, id, base, "Wrong authenticator code.")
+			return
+		}
 	}
 	req, err := s.Store.Claim(id)
 	if err != nil {

@@ -406,6 +406,24 @@ func TestListenersAreSeparate(t *testing.T) {
 		t.Fatalf("forged link: %d", st)
 	}
 }
+func TestAllowLoopbackIsOptIn(t *testing.T) {
+	e := newEnv(t)
+	e.create("staging-db", "password")
+	link := e.ntfy.lastLink(t)
+	if st, _ := e.approver("GET", link, nil, "127.0.0.1:9"); st != http.StatusForbidden {
+		t.Fatalf("loopback without demo flag: %d", st)
+	}
+	e.srv.AllowLoopback = true
+	if st, body := e.approver("GET", link, nil, "127.0.0.1:9"); st != http.StatusOK || !strings.Contains(body, "Demo on this machine") {
+		t.Fatalf("loopback demo: %d %s", st, body)
+	}
+	if st, _ := e.approver("GET", link, nil, "[::1]:9"); st != http.StatusOK {
+		t.Fatalf("ipv6 loopback: %d", st)
+	}
+	if st, _ := e.approver("GET", link, nil, "192.168.1.5:9"); st != http.StatusForbidden {
+		t.Fatalf("LAN still forbidden: %d", st)
+	}
+}
 
 func TestRestartForgetsRequests(t *testing.T) {
 	e := newEnv(t)
@@ -424,5 +442,23 @@ func TestPanicGivesContractResponse(t *testing.T) {
 	r, _ := e.agent("POST", "/v1/requests", `{"item":"staging-db","field":"password","reason":"x"}`, e.token)
 	if code(r) != contract.CodeInternalError {
 		t.Fatalf("want internal_error, got %+v", r)
+	}
+}
+
+func TestAdminCannotRunBW(t *testing.T) {
+	e := newEnv(t)
+	tok, hash, err := auth.NewAgentToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.cfg.Admin.TokenSHA256 = hash
+	req := httptest.NewRequest(http.MethodPost, "/admin/bw", strings.NewReader("args=list"))
+	req.RemoteAddr = "127.0.0.1:9"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(&http.Cookie{Name: "broker_admin", Value: tok})
+	w := httptest.NewRecorder()
+	e.srv.AdminHandler().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("admin bw runner still exists: %d", w.Code)
 	}
 }

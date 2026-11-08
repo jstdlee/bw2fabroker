@@ -62,14 +62,14 @@ func cmdDoctor() error {
 	}
 
 	if strings.HasPrefix(cfg.Agent.Listen, "unix:") {
-		ok("agent API on " + cfg.Agent.Listen)
+		warn("agent API is a local socket; use the tailnet HTTP address and a bearer token")
 	} else if cfg.AgentListenIsTailnet() {
-		warn("agent API on the tailnet (" + cfg.Agent.Listen + "): remote agents are protected by their token only")
+		ok("agent API on the tailnet (" + cfg.Agent.Listen + ")")
 	} else {
 		ok("agent API on " + cfg.Agent.Listen)
 	}
 	if len(cfg.Agents) == 0 {
-		warn("no agents registered; run `broker agent add NAME`")
+		warn("no agents registered; add one in the admin panel")
 	}
 
 	bw := vault.NewBW(cfg.Vault.BWPath, cfg.Vault.AppData)

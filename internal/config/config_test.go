@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jstdlee/bw2fabroker/internal/auth"
 )
 
 func TestSaveLoadMode(t *testing.T) {
@@ -51,5 +53,33 @@ func TestValidateAndAuto(t *testing.T) {
 	c.Auto = []AutoRule{{ItemID: "a", Field: "totp"}}
 	if c.Validate() == nil {
 		t.Fatal("totp auto accepted")
+	}
+}
+
+func TestAdminTokenIsNotAgentToken(t *testing.T) {
+	c := &Config{HMACKey: strings.Repeat("ab", 32), ApprovalPassword: "$argon2id$x"}
+	c.Defaults()
+	c.Admin.Server = "100.64.0.1:8788"
+	if c.Validate() == nil {
+		t.Fatal("tailnet admin server accepted")
+	}
+	c.Admin.Server = "127.0.0.1:8788"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.Admin.TokenSHA256 = "abc"
+	c.Agents["claude"] = Agent{TokenSHA256: "abc"}
+	if c.Validate() == nil {
+		t.Fatal("shared admin and agent token accepted")
+	}
+	c.Agents["claude"] = Agent{TokenSHA256: "def"}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	const shared = "bwb_same-token"
+	c.Agents["claude"] = Agent{TokenSHA256: auth.HashToken(shared)}
+	t.Setenv("BROKER_ADMIN_TOKEN", shared)
+	if _, err := ApplyEnv(c); err == nil {
+		t.Fatal("BROKER_ADMIN_TOKEN matching an agent accepted")
 	}
 }

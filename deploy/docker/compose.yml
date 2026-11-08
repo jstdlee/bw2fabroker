@@ -23,6 +23,18 @@ services:
     image: bw2fabroker:local
     network_mode: service:tailscale
     depends_on: [tailscale]
+    environment:
+      BROKER_APPROVAL_PASSWORD: ${BROKER_APPROVAL_PASSWORD:-}
+      BROKER_ADMIN_TOKEN: ${BROKER_ADMIN_TOKEN:-}
+      BROKER_NTFY_URL: ${BROKER_NTFY_URL:-}
+      BROKER_NTFY_DOMAIN: ${BROKER_NTFY_DOMAIN:-}
+      BROKER_NTFY_TOPIC: ${BROKER_NTFY_TOPIC:-}
+      BROKER_NTFY_TOKEN: ${BROKER_NTFY_TOKEN:-}
+      BROKER_BIND_HOST: ${BROKER_BIND_HOST:-}
+      BROKER_BIND_PORT: ${BROKER_BIND_PORT:-}
+      BROKER_PUBLIC_HOST: ${BROKER_PUBLIC_HOST:-}
+      BW_MASTER_PASSWORD: ${BW_MASTER_PASSWORD:-}
+      BW_SERVER: ${BW_SERVER:-}
     volumes:
       - broker-data:/data
       - ts-socket:/var/run/tailscale

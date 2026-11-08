@@ -16,6 +16,15 @@ import (
 	"time"
 )
 
+// Action is one ntfy button. View opens the approval page. HTTP is the callback that
+// refuses to approve without the approval password.
+type Action struct {
+	Action string // "view" or "http"
+	Label  string
+	URL    string
+	Method string
+}
+
 // Message is one push.
 type Message struct {
 	Title    string
@@ -23,12 +32,16 @@ type Message struct {
 	Click    string // approval link
 	Priority int    // 1-5
 	Tags     []string
+	Actions  []Action
 }
 
 // Notifier sends a push.
 type Notifier interface {
 	Send(ctx context.Context, m Message) error
 }
+
+// ErrPublicChannel means the topic accepted a request with no bearer token.
+var ErrPublicChannel = errors.New("ntfy topic accepts requests without bearer authentication")
 
 var topicRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
@@ -101,7 +114,7 @@ type Ntfy struct {
 	Client    *http.Client
 }
 
-// New builds an ntfy client after checking the config.
+// New builds an ntfy client. A bearer token is required.
 func New(rawURL, ownDomain, topic, token string) (*Ntfy, error) {
 	if _, err := CheckURL(rawURL, ownDomain); err != nil {
 		return nil, err
@@ -109,7 +122,10 @@ func New(rawURL, ownDomain, topic, token string) (*Ntfy, error) {
 	if err := CheckTopic(topic); err != nil {
 		return nil, err
 	}
-	return &Ntfy{URL: rawURL, OwnDomain: ownDomain, Topic: topic, Token: token, Client: NewHTTPClient()}, nil
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("ntfy bearer token is required")
+	}
+	return &Ntfy{URL: rawURL, OwnDomain: ownDomain, Topic: topic, Token: strings.TrimSpace(token), Client: NewHTTPClient()}, nil
 }
 
 // NewHTTPClient returns a client that never follows redirects.
@@ -128,13 +144,21 @@ func NewHTTPClient() *http.Client {
 	}
 }
 
+type actionBody struct {
+	Action string `json:"action"`
+	Label  string `json:"label"`
+	URL    string `json:"url"`
+	Method string `json:"method,omitempty"`
+}
+
 type publish struct {
-	Topic    string   `json:"topic"`
-	Title    string   `json:"title,omitempty"`
-	Message  string   `json:"message"`
-	Click    string   `json:"click,omitempty"`
-	Priority int      `json:"priority,omitempty"`
-	Tags     []string `json:"tags,omitempty"`
+	Topic    string       `json:"topic"`
+	Title    string       `json:"title,omitempty"`
+	Message  string       `json:"message"`
+	Click    string       `json:"click,omitempty"`
+	Priority int          `json:"priority,omitempty"`
+	Tags     []string     `json:"tags,omitempty"`
+	Actions  []actionBody `json:"actions,omitempty"`
 }
 
 // Send checks the URL again, then posts the message. Redirects count as failure.
@@ -143,7 +167,11 @@ func (n *Ntfy) Send(ctx context.Context, m Message) error {
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(publish{Topic: n.Topic, Title: m.Title, Message: m.Body, Click: m.Click, Priority: m.Priority, Tags: m.Tags})
+	var actions []actionBody
+	for _, a := range m.Actions {
+		actions = append(actions, actionBody{Action: a.Action, Label: a.Label, URL: a.URL, Method: a.Method})
+	}
+	body, err := json.Marshal(publish{Topic: n.Topic, Title: m.Title, Message: m.Body, Click: m.Click, Priority: m.Priority, Tags: m.Tags, Actions: actions})
 	if err != nil {
 		return err
 	}
@@ -152,9 +180,7 @@ func (n *Ntfy) Send(ctx context.Context, m Message) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if n.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+n.Token)
-	}
+	req.Header.Set("Authorization", "Bearer "+n.Token)
 	resp, err := n.Client.Do(req)
 	if err != nil {
 		return fmt.Errorf("ntfy: %w", err)
@@ -167,4 +193,43 @@ func (n *Ntfy) Send(ctx context.Context, m Message) error {
 		return fmt.Errorf("ntfy answered %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// RequireAuth rejects a topic that can be published to or read without a bearer token.
+func (n *Ntfy) RequireAuth(ctx context.Context) error {
+	if strings.TrimSpace(n.Token) == "" {
+		return errors.New("ntfy bearer token is required")
+	}
+	u, err := CheckURL(n.URL, n.OwnDomain)
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(publish{Topic: n.Topic, Title: "bw2fabroker auth probe", Message: "This server accepted a publish with no bearer token. The broker will not use it."})
+	if err := n.probe(ctx, http.MethodPost, u.String(), body); err != nil {
+		return err
+	}
+	sub := strings.TrimRight(u.String(), "/") + "/" + n.Topic + "/json?poll=1&since=1s"
+	return n.probe(ctx, http.MethodGet, sub, nil)
+}
+
+func (n *Ntfy) probe(ctx context.Context, method, raw string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, method, raw, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := n.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("ntfy auth probe: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return ErrPublicChannel
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil
+	}
+	return fmt.Errorf("ntfy auth probe returned %d", resp.StatusCode)
 }

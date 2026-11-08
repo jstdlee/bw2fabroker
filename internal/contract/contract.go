@@ -262,25 +262,49 @@ func ParseRequest(body io.Reader) (Request, Code) {
 
 // Field is a parsed field name.
 type Field struct {
-	Kind   string // username, password, totp, uri, custom
-	Custom string // name when Kind == "custom"
+	Kind   string // username, password, totp, uri, notes, custom, card, identity, attachment
+	Custom string // name when Kind needs one
 }
 
 func (f Field) String() string {
-	if f.Kind == "custom" {
-		return "custom:" + f.Custom
+	switch f.Kind {
+	case "custom", "card", "identity", "attachment":
+		return f.Kind + ":" + f.Custom
+	default:
+		return f.Kind
 	}
-	return f.Kind
 }
 
-// ParseField accepts only the allowed fields. Notes and attachments are never allowed.
+// ParseField accepts every stored text field. The value still has to pass ValidValue.
 func ParseField(s string) (Field, bool) {
 	switch s {
-	case "username", "password", "totp", "uri":
+	case "username", "password", "totp", "uri", "notes":
 		return Field{Kind: s}, true
 	}
-	if name, ok := strings.CutPrefix(s, "custom:"); ok && validLine(name, 1, MaxCustomName) {
-		return Field{Kind: "custom", Custom: name}, true
+	kind, name, ok := strings.Cut(s, ":")
+	if !ok || !validLine(name, 1, MaxCustomName) {
+		return Field{}, false
+	}
+	switch kind {
+	case "custom":
+		return Field{Kind: kind, Custom: name}, true
+	case "attachment":
+		if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+			return Field{}, false
+		}
+		return Field{Kind: kind, Custom: name}, true
+	case "card":
+		switch name {
+		case "cardholder", "brand", "number", "exp_month", "exp_year", "code":
+			return Field{Kind: kind, Custom: name}, true
+		}
+	case "identity":
+		switch name {
+		case "title", "first_name", "middle_name", "last_name", "address1", "address2", "address3",
+			"city", "state", "postal_code", "country", "company", "email", "phone", "ssn",
+			"username", "passport_number", "license_number":
+			return Field{Kind: kind, Custom: name}, true
+		}
 	}
 	return Field{}, false
 }

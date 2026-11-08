@@ -34,11 +34,9 @@ const defaultURL = "unix:/run/bw2fabroker/agent.sock"
 var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 
 type options struct {
-	env    string
-	item   string
-	field  string
-	reason string
-	cmd    []string
+	env, item, field, reason, query string
+	list                            bool
+	cmd                             []string
 }
 
 func parseArgs(args []string) (options, error) {
@@ -72,6 +70,14 @@ func parseArgs(args []string) (options, error) {
 			pos = append(pos, a)
 		}
 	}
+	if len(pos) == 1 && pos[0] == "list" {
+		o.list = true
+		return o, nil
+	}
+	if len(pos) == 2 && pos[0] == "search" {
+		o.query = pos[1]
+		return o, nil
+	}
 	if len(pos) != 2 {
 		return o, errors.New("need ITEM and FIELD")
 	}
@@ -92,7 +98,10 @@ func parseArgs(args []string) (options, error) {
 }
 
 const usageText = `usage: broker-get [--env VAR] ITEM FIELD --reason "why" [-- CMD ARGS...]
-FIELD: username | password | totp | uri | custom:<name>
+       broker-get list
+       broker-get search TEXT
+FIELD: username | password | totp | uri | notes | custom:<name> | card:<part> | identity:<part> | attachment:<file>
+list and search print names and field names, never values.
 `
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -105,6 +114,9 @@ func run(args []string) int {
 		}
 		fmt.Fprint(os.Stderr, usageText)
 		return 2
+	}
+	if o.list || o.query != "" {
+		return catalog(o)
 	}
 	resp := fetch(o)
 	out := os.Stdout
@@ -200,6 +212,46 @@ func client() (*http.Client, string, error) {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = nil // the broker is local or on the tailnet; never send the token through a proxy
 	return &http.Client{Transport: tr, Timeout: 65 * time.Second}, strings.TrimSuffix(u, "/"), nil
+}
+
+func catalog(o options) int {
+	tok, err := token()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "broker-get:", err)
+		return 2
+	}
+	c, base, err := client()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "broker-get:", err)
+		return 2
+	}
+	path := "/v1/items"
+	if o.query != "" {
+		path = "/v1/search?q=" + urlQuery(o.query)
+	}
+	req, err := http.NewRequest(http.MethodGet, base+path, nil)
+	if err != nil {
+		return 2
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	res, err := c.Do(req)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "broker-get: cannot reach the broker:", err)
+		return 2
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil || res.StatusCode != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "broker-get: list failed")
+		return 2
+	}
+	fmt.Println(string(raw))
+	return 0
+}
+
+func urlQuery(s string) string {
+	r := strings.NewReplacer(" ", "%20", "&", "%26", "?", "%3F", "#", "%23")
+	return r.Replace(s)
 }
 
 func fetch(o options) contract.Response {

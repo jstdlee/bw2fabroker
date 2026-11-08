@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jstdlee/bw2fabroker/internal/audit"
 	"github.com/jstdlee/bw2fabroker/internal/auth"
 	"github.com/jstdlee/bw2fabroker/internal/config"
 	"github.com/jstdlee/bw2fabroker/internal/contract"
@@ -47,6 +48,17 @@ type Server struct {
 	Expiry   time.Duration
 	Hold     time.Duration
 
+	// AllowLoopback lets 127.0.0.1 and ::1 open the approval page. Only `broker demo`
+	AllowLoopback bool
+
+	// UpdateConfig saves a mutated config. The admin panel uses it.
+	UpdateConfig func(func(*config.Config) error) error
+	// Audit is the on-disk decision log. Nil in tests that do not set it.
+	Audit *audit.Log
+
+	allowLAN atomic.Bool
+	bindMode atomic.Value
+
 	linkBase        atomic.Value // string, e.g. http://100.x.y.z:8787; empty when the approver side is down
 	approvalMu      sync.Mutex
 	pwFailures      []time.Time
@@ -64,6 +76,7 @@ func New(cfg func() *config.Config, v vault.Vault, n notify.Notifier, l *auth.Li
 		Expiry: DefaultExpiry, Hold: DefaultHold,
 		denials: map[string][]time.Time{}, requests: map[string][]time.Time{}, suspended: map[string]bool{}}
 	s.linkBase.Store("")
+	s.bindMode.Store("")
 	s.Store = pending.New(func() time.Time { return s.Now() }, func(r *pending.Request) {
 		s.audit("expired", r.Agent, slog.String("request_id", r.ID), slog.String("item_id", r.Item.ID), slog.String("field", r.Field.String()))
 	})
@@ -75,10 +88,43 @@ func (s *Server) audit(event, agent string, attrs ...slog.Attr) {
 	if agent != "" {
 		args = append(args, slog.String("agent", agent))
 	}
+	ev := audit.Event{Time: s.Now(), Actor: agent, Result: event}
+	var item, field string
 	for _, a := range attrs {
 		args = append(args, a)
+		switch a.Key {
+		case "remote":
+			ev.IP = a.Value.String()
+		case "name":
+			ev.Name = a.Value.String()
+		case "item_id":
+			item = a.Value.String()
+		case "field":
+			field = a.Value.String()
+		}
 	}
 	s.Log.Info("audit", args...)
+	if ev.Name == "" && (item != "" || field != "") {
+		ev.Name = item + "/" + field
+	}
+	if ev.Name == "" {
+		ev.Name = event
+	}
+	if s.Audit != nil {
+		s.Audit.Add(ev)
+	}
+}
+
+// SetExposure records whether the approver is on Tailscale or a LAN address.
+func (s *Server) SetExposure(mode string) {
+	s.allowLAN.Store(mode == "lan")
+	s.bindMode.Store(mode)
+}
+
+// BindMode is "tailscale", "lan", or "".
+func (s *Server) BindMode() string {
+	m, _ := s.bindMode.Load().(string)
+	return m
 }
 
 // SetApproverBase sets the link base when the approver listener is up, or "" when it is down.
@@ -160,7 +206,7 @@ func (s *Server) recordDenial(agent string) {
 	s.agentMu.Unlock()
 	if suspend {
 		s.audit("agent_suspended", agent)
-		s.push(notify.Message{Title: "Agent suspended", Body: "Agent " + agent + " was denied 3 times in 10 minutes. Run `broker agent resume " + agent + "` to allow it again.", Priority: 4, Tags: []string{"warning"}})
+		s.push(notify.Message{Title: "Agent suspended", Body: "Agent " + agent + " was denied 3 times in 10 minutes. Resume it from the admin panel.", Priority: 4, Tags: []string{"warning"}})
 	}
 }
 
@@ -212,6 +258,9 @@ func (s *Server) agentFromToken(r *http.Request) (string, bool) {
 		return "", false
 	}
 	cfg := s.Config()
+	if cfg.Admin.TokenSHA256 != "" && auth.TokenMatches(tok, cfg.Admin.TokenSHA256) {
+		return "", false
+	}
 	found := ""
 	for _, name := range cfg.AgentNames() {
 		if auth.TokenMatches(tok, cfg.Agents[name].TokenSHA256) {
@@ -228,7 +277,7 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request) {
 		contract.Write(w, contract.Rejected("", contract.CodeUnauthorized))
 		return
 	}
-	if r.URL.RawQuery != "" {
+	if r.URL.RawQuery != "" && !(r.Method == http.MethodGet && r.URL.Path == "/v1/search" && len(r.URL.Query()) == 1 && r.URL.Query().Get("q") != "") {
 		contract.Write(w, contract.Rejected("", contract.CodeBadRequest))
 		return
 	}
@@ -246,6 +295,8 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request) {
 			s.audit("delivered", agent, slog.String("request_id", id))
 		}
 		contract.Write(w, resp)
+	case r.Method == http.MethodGet && (r.URL.Path == "/v1/items" || r.URL.Path == "/v1/search"):
+		s.serveCatalog(w, r, agent)
 	default:
 		contract.Write(w, contract.Rejected("", contract.CodeBadRequest))
 	}
@@ -325,6 +376,7 @@ func (s *Server) create(ctx context.Context, agent string, r *http.Request) cont
 		Click:    link,
 		Priority: 5,
 		Tags:     []string{"key"},
+		Actions:  []notify.Action{{Action: "view", Label: "Approve", URL: link}},
 	})
 	if err != nil {
 		s.Store.Remove(id)
@@ -364,15 +416,39 @@ func (s *Server) logVaultErr(agent string, err error, code contract.Code) {
 // remoteIsTailnet reports whether the caller's address is in Tailscale's ranges. This is a range
 // check only; which tailnet device calls is not checked (owner decision).
 func remoteIsTailnet(r *http.Request) bool {
+	ip, ok := remoteIP(r)
+	return ok && config.IsTailnetIP(ip)
+}
+
+func remoteIsLoopback(r *http.Request) bool {
+	ip, ok := remoteIP(r)
+	return ok && ip.IsLoopback()
+}
+
+func remoteIP(r *http.Request) (netip.Addr, bool) {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return false
+		return netip.Addr{}, false
 	}
 	ip, err := netip.ParseAddr(host)
 	if err != nil {
+		return netip.Addr{}, false
+	}
+	return ip, true
+}
+
+func (s *Server) callerMayApprove(r *http.Request) bool {
+	ip, ok := remoteIP(r)
+	if !ok {
 		return false
 	}
-	return config.IsTailnetIP(ip)
+	if config.IsTailnetIP(ip) {
+		return true
+	}
+	if s.AllowLoopback && ip.IsLoopback() {
+		return true
+	}
+	return s.allowLAN.Load() && ip.IsPrivate()
 }
 
 func (s *Server) wrongPassword(id, agent string) (denied bool) {

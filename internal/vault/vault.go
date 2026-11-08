@@ -25,6 +25,14 @@ type Item struct {
 	Folder string
 }
 
+// CatalogItem is one item as list and search return it. Fields are names only.
+type CatalogItem struct {
+	ID     string
+	Name   string
+	Folder string
+	Fields []string
+}
+
 // Errors.
 var (
 	ErrUnknownItem   = errors.New("unknown item")
@@ -41,6 +49,11 @@ type Vault interface {
 	// HasField checks that the field exists without returning its value.
 	HasField(ctx context.Context, itemID string, f contract.Field) error
 	Read(ctx context.Context, itemID string, f contract.Field) (string, error)
+	// Search and List return names and field names. They do not return values.
+	Search(ctx context.Context, query string) ([]CatalogItem, error)
+	List(ctx context.Context) ([]CatalogItem, error)
+	// Exec runs bw for the admin mirror. stdout may contain secrets; the audit log must not store it.
+	Exec(ctx context.Context, args []string) (stdout, stderr string, err error)
 	Sync(ctx context.Context) error
 }
 
@@ -184,22 +197,15 @@ func (b *BW) Sync(ctx context.Context) error {
 }
 
 type bwItem struct {
-	ID       string  `json:"id"`
-	Name     string  `json:"name"`
-	FolderID *string `json:"folderId"`
-	Login    *struct {
-		Username *string `json:"username"`
-		Password *string `json:"password"`
-		Totp     *string `json:"totp"`
-		Uris     []struct {
-			URI *string `json:"uri"`
-		} `json:"uris"`
-	} `json:"login"`
-	Fields []struct {
-		Name  *string `json:"name"`
-		Value *string `json:"value"`
-		Type  int     `json:"type"`
-	} `json:"fields"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Notes       *string        `json:"notes"`
+	FolderID    *string        `json:"folderId"`
+	Login       *bwLogin       `json:"login"`
+	Card        *bwCard        `json:"card"`
+	Identity    *bwIdentity    `json:"identity"`
+	Fields      []bwField      `json:"fields"`
+	Attachments []bwAttachment `json:"attachments"`
 }
 
 func (b *BW) toItem(it bwItem) Item {
@@ -274,13 +280,20 @@ func (b *BW) HasField(ctx context.Context, itemID string, f contract.Field) erro
 		}
 		return nil
 	}
+	if f.Kind == "attachment" {
+		if namedAttachment(it, f.Custom) {
+			return nil
+		}
+		return ErrNoField
+	}
 	_, err = pickField(it, f)
 	return err
 }
 
 // Read returns one field of one item.
 func (b *BW) Read(ctx context.Context, itemID string, f contract.Field) (string, error) {
-	if f.Kind == "totp" {
+	switch f.Kind {
+	case "totp":
 		if !IsID(itemID) {
 			return "", ErrUnknownItem
 		}
@@ -289,6 +302,8 @@ func (b *BW) Read(ctx context.Context, itemID string, f contract.Field) (string,
 			return "", err
 		}
 		return strings.TrimSpace(string(out)), nil
+	case "attachment":
+		return b.readAttachment(ctx, itemID, f.Custom)
 	}
 	it, err := b.getItem(ctx, itemID)
 	if err != nil {
@@ -320,6 +335,8 @@ func pickField(it bwItem, f contract.Field) (string, error) {
 			return "", ErrNoField
 		}
 		return deref(it.Login.Uris[0].URI)
+	case "notes":
+		return deref(it.Notes)
 	case "custom":
 		var found []string
 		for _, fl := range it.Fields {
@@ -331,6 +348,10 @@ func pickField(it bwItem, f contract.Field) (string, error) {
 			return "", ErrNoField
 		}
 		return found[0], nil
+	case "card":
+		return cardField(it.Card, f.Custom)
+	case "identity":
+		return identityField(it.Identity, f.Custom)
 	}
 	return "", ErrNoField
 }

@@ -3,6 +3,8 @@ package vaulttest
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/jstdlee/bw2fabroker/internal/contract"
@@ -98,4 +100,45 @@ func (f *Fake) Read(_ context.Context, id string, fl contract.Field) (string, er
 		return "", f.ReadErr
 	}
 	return f.value(id, fl)
+}
+
+func (f *Fake) Search(_ context.Context, query string) ([]vault.CatalogItem, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Locked {
+		return nil, vault.ErrLocked
+	}
+	q := strings.ToLower(query)
+	var out []vault.CatalogItem
+	for _, it := range f.Items {
+		if q != "" && !strings.Contains(strings.ToLower(it.Name), q) {
+			continue
+		}
+		var fields []string
+		for k, v := range it.Fields {
+			if v != "" {
+				fields = append(fields, k)
+			}
+		}
+		sort.Strings(fields)
+		out = append(out, vault.CatalogItem{ID: it.ID, Name: it.Name, Folder: it.Folder, Fields: fields})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *Fake) List(ctx context.Context) ([]vault.CatalogItem, error) {
+	return f.Search(ctx, "")
+}
+
+func (f *Fake) Exec(_ context.Context, args []string) (string, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(args) == 0 {
+		return "", "bw needs arguments", vault.ErrLocked
+	}
+	if args[0] != "status" && f.Locked {
+		return "", "locked", vault.ErrLocked
+	}
+	return "ok " + strings.Join(args, " "), "", nil
 }

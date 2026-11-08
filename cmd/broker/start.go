@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/jstdlee/bw2fabroker/internal/api"
+	"github.com/jstdlee/bw2fabroker/internal/audit"
 	"github.com/jstdlee/bw2fabroker/internal/auth"
 	"github.com/jstdlee/bw2fabroker/internal/config"
 	"github.com/jstdlee/bw2fabroker/internal/notify"
@@ -27,8 +29,8 @@ import (
 	"github.com/jstdlee/bw2fabroker/internal/vault"
 )
 
-// configHolder reloads the config when the file changes, so `broker agent add`, `passwd`, and
-// `auto` take effect without a restart. A broken file keeps the last good config.
+// configHolder reloads the config when the file changes, so admin-panel edits
+// take effect without a restart. A broken file keeps the last good config.
 type configHolder struct {
 	path  string
 	mu    sync.Mutex
@@ -76,28 +78,38 @@ func cmdStart(args []string) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
+	if _, err := config.ApplyEnv(cfg); err != nil {
+		return fmt.Errorf("environment: %w", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("config after environment: %w", err)
+	}
 	if os.Geteuid() == 0 {
 		log.Warn("running as root; run the broker as its own user (see deploy/)")
 	}
 	st0, _ := os.Stat(cfgPath)
 	holder := &configHolder{path: cfgPath, cfg: cfg, mtime: st0.ModTime(), log: log}
 
-	// ntfy: own domain only, checked before anything starts.
 	n, err := notify.New(cfg.Ntfy.URL, cfg.Ntfy.OwnDomain, cfg.Ntfy.Topic, cfg.Ntfy.Token)
 	if err != nil {
-		return fmt.Errorf("ntfy config: %w (run `broker ntfy set`)", err)
+		return fmt.Errorf("ntfy config: %w (set ntfy in the admin panel)", err)
+	}
+	actx, acancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err = n.RequireAuth(actx)
+	acancel()
+	if err != nil {
+		return fmt.Errorf("ntfy: %w", err)
 	}
 
-	// Tailscale must be installed and connected.
 	ts := tailscale.NewLocalAPI(cfg.Tailscale.Socket)
 	pctx, pcancel := context.WithTimeout(context.Background(), 10*time.Second)
-	tstatus, err := tailscale.Preflight(pctx, ts)
+	mode, addr, err := chooseBind(pctx, cfg, ts)
 	pcancel()
 	if err != nil {
 		return err
 	}
-	if _, err := approverAddr(cfg, tstatus); err != nil {
-		return err
+	if mode == "lan" {
+		log.Warn("approver is on a LAN address; any device on this network can open the approval page, which still requires the approval password", slog.String("addr", addr.String()))
 	}
 
 	linker, err := auth.NewLinker(cfg.HMACKey)
@@ -106,6 +118,26 @@ func cmdStart(args []string) error {
 	}
 	bw := vault.NewBW(cfg.Vault.BWPath, cfg.Vault.AppData)
 	srv := api.New(holder.Get, bw, n, linker, log)
+	if alog, err := audit.Open(filepath.Join(filepath.Dir(cfgPath), "audit.jsonl")); err != nil {
+		return fmt.Errorf("audit log: %w", err)
+	} else {
+		srv.Audit = alog
+		srv.Audit = alog
+	}
+	srv.UpdateConfig = func(fn func(*config.Config) error) error {
+		c, err := config.Load(cfgPath)
+		if err != nil {
+			return err
+		}
+		if err := fn(c); err != nil {
+			return err
+		}
+		if err := c.Validate(); err != nil {
+			return err
+		}
+		return config.Save(cfgPath, c)
+	}
+	srv.SetExposure(mode)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -128,11 +160,34 @@ func cmdStart(args []string) error {
 			stop()
 		}
 	}()
-	log.Info("audit", slog.String("event", "started"), slog.String("agent_listen", cfg.Agent.Listen), slog.String("version", version))
+	log.Info("audit", slog.String("event", "started"), slog.String("agent_listen", cfg.Agent.Listen), slog.String("bind", addr.String()), slog.String("bind_mode", mode), slog.String("version", version))
+	if cfg.Admin.Server != "" && cfg.Admin.TokenSHA256 != "" {
+		adminHTTP := &http.Server{Addr: cfg.Admin.Server, Handler: srv.AdminHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second}
+		go func() {
+			log.Info("audit", slog.String("event", "admin_up"), slog.String("addr", cfg.Admin.Server))
+			if err := adminHTTP.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("admin panel stopped", slog.String("error", err.Error()))
+			}
+		}()
+	} else if cfg.Admin.Server != "" {
+		log.Warn("admin.server is set but there is no admin token; set BROKER_ADMIN_TOKEN or run broker init")
+	}
 
 	go manageApprover(ctx, srv, holder, ts, log)
 	go syncLoop(ctx, bw, log)
+	if mode == "lan" {
+		go func() {
+			sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			_ = n.Send(sctx, notify.Message{Title: "bw2fabroker is on the LAN", Body: "The approval page is bound to " + addr.String() + ". Any device on this network can open it. Approval still requires the approval password.", Priority: 4, Tags: []string{"warning"}})
+		}()
+	}
 
+	if pw := os.Getenv("BW_MASTER_PASSWORD"); pw != "" && !bw.Unlocked() {
+		if err := srv.UnlockVault(ctx, pw); err != nil {
+			log.Warn("BW_MASTER_PASSWORD did not unlock the vault", slog.String("error", err.Error()))
+		}
+	}
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		for i := 0; i < 3 && !bw.Unlocked(); i++ {
 			pw, err := readSecret("Bitwarden master password of the agents account: ")
@@ -203,24 +258,28 @@ func dirOf(p string) string {
 	return "/"
 }
 
-// approverAddr picks the tailnet IP to bind: the override if it belongs to this node, else the
-// node's IPv4 address.
-func approverAddr(cfg *config.Config, st tailscale.Status) (netip.AddrPort, error) {
-	ip, ok := st.IPv4()
-	if !ok {
-		return netip.AddrPort{}, tailscale.ErrNoAddress
+func chooseBind(ctx context.Context, cfg *config.Config, ts tailscale.Checker) (string, netip.AddrPort, error) {
+	var ips []netip.Addr
+	st, err := tailscale.Preflight(ctx, ts)
+	if err == nil {
+		ips = st.IPs
 	}
-	if cfg.Approver.BindIP != "" {
-		o, err := netip.ParseAddr(cfg.Approver.BindIP)
+	exp, berr := config.ResolveBind(ctx, cfg, ips)
+	if berr != nil {
 		if err != nil {
-			return netip.AddrPort{}, err
+			return "", netip.AddrPort{}, err
 		}
-		if !st.Has(o) {
-			return netip.AddrPort{}, fmt.Errorf("approver.bind_ip %s is not a tailnet address of this node", o)
-		}
-		ip = o
+		return "", netip.AddrPort{}, berr
 	}
-	return netip.AddrPortFrom(ip, uint16(cfg.Approver.Port)), nil
+	if exp.Mode == "tailscale" && err != nil {
+		return "", netip.AddrPort{}, err
+	}
+	return exp.Mode, exp.Addr, nil
+}
+
+func approverAddr(cfg *config.Config, st tailscale.Status) (netip.AddrPort, error) {
+	exp, err := config.ResolveBind(context.Background(), cfg, st.IPs)
+	return exp.Addr, err
 }
 
 // manageApprover keeps the approver listener on the tailnet IP while Tailscale is up, and closes
@@ -244,15 +303,11 @@ func manageApprover(ctx context.Context, srv *api.Server, holder *configHolder, 
 	check := func() {
 		cfg := holder.Get()
 		c, cancel := context.WithTimeout(ctx, 10*time.Second)
-		st, err := tailscale.Preflight(c, ts)
+		mode, addr, err := chooseBind(c, cfg, ts)
 		cancel()
 		if err != nil {
 			closeL(err.Error())
-			return
-		}
-		addr, err := approverAddr(cfg, st)
-		if err != nil {
-			closeL(err.Error())
+			srv.SetExposure("")
 			return
 		}
 		if hs != nil && addr == bind {
@@ -271,8 +326,9 @@ func manageApprover(ctx context.Context, srv *api.Server, holder *configHolder, 
 		hs = &http.Server{Handler: srv.ApproverHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 90 * time.Second}
 		go func(s *http.Server) { _ = s.Serve(l) }(hs)
 		bind = addr
+		srv.SetExposure(mode)
 		srv.SetApproverBase("http://" + net.JoinHostPort(host, strconv.Itoa(int(addr.Port()))))
-		log.Info("audit", slog.String("event", "approver_up"), slog.String("addr", addr.String()))
+		log.Info("audit", slog.String("event", "approver_up"), slog.String("addr", addr.String()), slog.String("mode", mode))
 	}
 	check()
 	t := time.NewTicker(30 * time.Second)

@@ -34,17 +34,18 @@ make install                    # binaries to /usr/local/bin, systemd unit, user
 npm install -g @bitwarden/cli   # bw must be on PATH for the broker user
 
 sudo -u broker -H env BROKER_CONFIG=/etc/bw2fabroker/config.toml HOME=/var/lib/bw2fabroker sh -c '
-  broker init --ntfy-domain ntfy.example.com            # asks for a new approval password
-  broker ntfy set --url https://ntfy.example.com --topic approvals --token tk_...   # sends a test push
+  broker init --ntfy-domain ntfy.example.com            # prints the admin token once
   BITWARDENCLI_APPDATA_DIR=/var/lib/bw2fabroker/bw bw config server https://vault.example.com
   BITWARDENCLI_APPDATA_DIR=/var/lib/bw2fabroker/bw bw login --apikey   # agents account API key
-  broker agent add claude                               # prints the agent token once
 '
+# Open http://127.0.0.1:8788/admin with that token. Set ntfy, the agent HTTP
+# address (the tailnet IP), and an agent. The broker CLI cannot do this.
 sudo systemctl enable --now bw2fabroker
 sudo -u broker env BROKER_CONFIG=/etc/bw2fabroker/config.toml broker unlock   # agents account master password
 sudo -u broker env BROKER_CONFIG=/etc/bw2fabroker/config.toml broker doctor
-sudo usermod -aG broker-clients <agent user>            # may use /run/bw2fabroker/agent.sock
 ```
+
+Agents call `http://<tailnet-ip>:<agent-port>` with their own bearer token. There is no agent socket.
 
 Docker mode (with a Tailscale sidecar): see [deploy/docker/README.md](deploy/docker/README.md).
 
@@ -52,7 +53,7 @@ Docker mode (with a Tailscale sidecar): see [deploy/docker/README.md](deploy/doc
 
 ```sh
 export BROKER_TOKEN=bwb_...                          # or BROKER_TOKEN_FILE
-export BROKER_URL=unix:/run/bw2fabroker/agent.sock   # or http://100.x.y.z:8786 for a remote broker
+export BROKER_URL=http://100.x.y.z:8786              # agent HTTP API on the tailnet
 
 # Preferred: the value goes only into the command's environment.
 broker-get --env PGPASSWORD staging-db password --reason "run migrations on staging" -- psql -h db -c 'select 1'
@@ -69,7 +70,8 @@ Every answer is exactly one JSON line:
 
 `status` is `pending`, `approved`, `denied`, or `rejected`; `code` comes from a fixed list (see
 [the contract](docs/DEV_PLAN.md#4-response-gating-the-agent-contract-r19)). Fields: `username`,
-`password`, `totp`, `uri`, `custom:<name>`. Notes and attachments are never available.
+`password`, `totp`, `uri`, `notes`, `custom:<name>`, `card:<part>`, `identity:<part>`,
+`attachment:<file>`. `broker-get list` and `broker-get search TEXT` print names and field names only.
 
 `broker-get` exits 0 (approved), 1 (denied), or 2 (rejected). With `--env`, the JSON line goes to
 stderr and the exit status is the command's own.
@@ -78,26 +80,24 @@ stderr and the exit status is the command's own.
 
 | Command | Does |
 |---|---|
-| `broker init` | Config, HMAC key, approval password (argon2id), ntfy own domain |
-| `broker passwd` | Change the approval password |
-| `broker ntfy set --url --topic [--token]` | ntfy target, own domain only; sends a test push |
-| `broker net set [--ip] [--port] [--public-host] [--agent-listen] [--agent-socket-gid]` | Listeners |
-| `broker agent add/rm/resume NAME`, `broker agent list` | Agent tokens (only hashes are stored) |
-| `broker auto add/rm ITEM_ID [--field F]`, `broker auto list` | Items returned without asking (never `totp`) |
-| `broker start` / `broker unlock` | Serve / unlock `bw` in a running broker |
+| `broker init` | Config, HMAC key, approval password (argon2id), loopback admin panel, admin token (printed once) |
+| `broker start` / `broker unlock` | Serve / unlock `bw`. `BW_MASTER_PASSWORD` unlocks at start |
 | `broker unlock-approvals` | Clear the lockout after 10 wrong passwords in an hour |
 | `broker status`, `broker doctor` | State of the running broker / setup checks |
 
-The audit log is one JSON line per event on stderr (journald under systemd). It never holds a value
-or a password.
+`passwd`, `ntfy`, `net`, `agent`, `auto`, `admin-token`, and `2fa` are not CLI commands. The loopback admin panel does that work: approval password, ntfy, bind address, agent HTTP listen, agents, auto rules, authenticator enrollment, and resuming a suspended agent. The panel does not run arbitrary `bw` commands.
+
+`broker init` sets `admin.server` to `127.0.0.1:8788` and prints the admin token once. The admin token is not an agent access token: a config where the two hashes match is refused, the agent API rejects the admin token, and the admin panel rejects an agent token. The panel answers only on loopback. In LAN mode the approval page is reachable on that network and still asks for the approval password. Tagging an item for 2FA also asks for the authenticator code created in the panel.
+
+The audit log is `audit.jsonl` next to the config (seven days) and one JSON line per event on stderr. It never holds a value or a password.
 
 ## Limits that protect you
 
 - One approval = one secret, delivered once. Requests expire after 120 s.
 - 3 wrong passwords deny the request; 10 in an hour lock all approvals.
-- 3 denials in 10 minutes suspend the agent until `broker agent resume`.
+- 3 denials in 10 minutes suspend the agent until it is resumed from the admin panel.
 - At most 5 pending and 20 new requests per agent per 10 minutes.
-- If Tailscale goes down, the approval page closes and pending requests expire.
+- If the approver is on a tailnet address and Tailscale goes down, the approval page closes and pending requests expire. A LAN hostname stays up, and the broker sends a warning because any device on that network can open the page.
 
 ## Develop
 
@@ -106,3 +106,37 @@ make vet test     # go vet, gofmt, tests with the race detector
 make fuzz         # fuzz the request parser
 make docker       # build the image
 ```
+
+## Demo
+
+No Tailscale, no ntfy, no Bitwarden. A fake vault on localhost, with the same approval page:
+
+```sh
+make build
+./bin/broker demo
+```
+
+It prints an approval password, an agent token, and the two URLs. Open the approver URL, then:
+
+```sh
+export BROKER_TOKEN=...          # printed once at startup
+export BROKER_URL=http://127.0.0.1:8786
+./bin/broker-get staging-db password --reason "try the demo approval page"
+```
+
+`weather` / `custom:api_key` is an auto item (no prompt). `login` / `totp` always asks. The demo
+listens on loopback only and never reads a real vault.
+
+```mermaid
+flowchart LR
+  agent["agent: broker-get"] --> sock["agent socket"]
+  sock --> broker["broker"]
+  broker --> bw["bw CLI"]
+  broker --> ntfy["your ntfy"]
+  ntfy --> phone["phone"]
+  phone --> page["approval page"]
+  page --> broker
+```
+
+The approval page listens on this node's Tailscale address, or on one private LAN hostname. It never listens on a public address. ntfy stays on your own server; the broker refuses a topic that accepts a request with no bearer token.
+

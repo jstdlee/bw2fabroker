@@ -37,14 +37,16 @@ type Config struct {
 	Tailscale Tailscale        `toml:"tailscale"`
 	Vault     Vault            `toml:"vault"`
 	Admin     Admin            `toml:"admin"`
+	TwoFA     TwoFA            `toml:"twofa"`
 	Agents    map[string]Agent `toml:"agents"`
 	Auto      []AutoRule       `toml:"auto"`
 }
 
-// Approver is the tailnet listener for the approval page.
+// Approver is the listener for the approval page and the admin panel.
 type Approver struct {
 	Port       int    `toml:"port"`        // default 8787
-	BindIP     string `toml:"bind_ip"`     // optional override; must be this node's tailnet IP
+	BindIP     string `toml:"bind_ip"`     // optional tailnet or private LAN address
+	BindHost   string `toml:"bind_host"`   // tailnet or LAN hostname; preferred over a raw LAN IP
 	PublicHost string `toml:"public_host"` // optional host for links (e.g. MagicDNS name)
 }
 
@@ -71,11 +73,20 @@ type Tailscale struct {
 type Vault struct {
 	BWPath  string `toml:"bw_path"`  // default "bw"
 	AppData string `toml:"app_data"` // BITWARDENCLI_APPDATA_DIR, optional
+	Server  string `toml:"server"`   // bw config server URL, optional
 }
 
-// Admin socket for unlock and resume commands.
+// Admin socket for unlock and resume, plus the bearer key for the admin panel.
 type Admin struct {
-	Socket string `toml:"socket"` // default /run/bw2fabroker/admin.sock
+	Socket      string `toml:"socket"`       // default /run/bw2fabroker/admin.sock
+	Server      string `toml:"server"`       // optional, e.g. 127.0.0.1:8788; empty means the panel is off
+	TokenSHA256 string `toml:"token_sha256"` // sha256 of the admin API key; the key itself is not stored
+}
+
+// TwoFA is the authenticator secret and the item ids that require a code.
+type TwoFA struct {
+	Secret string   `toml:"secret"`
+	Items  []string `toml:"items"`
 }
 
 // Agent is one registered agent; only the token hash is stored.
@@ -138,9 +149,16 @@ func (c *Config) Validate() error {
 		return errors.New("approver.port out of range")
 	}
 	if c.Approver.BindIP != "" {
-		if _, err := netip.ParseAddr(c.Approver.BindIP); err != nil {
+		ip, err := netip.ParseAddr(c.Approver.BindIP)
+		if err != nil {
 			return fmt.Errorf("approver.bind_ip: %w", err)
 		}
+		if _, ok := Classify(ip); !ok {
+			return fmt.Errorf("approver.bind_ip %s is not a tailnet or private LAN address", ip)
+		}
+	}
+	if c.Approver.BindHost != "" && !ValidHostname(c.Approver.BindHost) {
+		return errors.New("approver.bind_host must be a hostname")
 	}
 	if err := checkListen(c.Agent.Listen); err != nil {
 		return err
@@ -149,6 +167,36 @@ func (c *Config) Validate() error {
 		if r.Field == "totp" {
 			return errors.New("auto rule for totp is not allowed")
 		}
+	}
+	if err := checkAdminServer(c.Admin.Server); err != nil {
+		return err
+	}
+	if c.Admin.TokenSHA256 != "" && c.AgentHasHash(c.Admin.TokenSHA256) {
+		return errors.New("admin token must not be the same as an agent access token")
+	}
+	return nil
+}
+
+// AgentHasHash reports whether an agent access token is stored under hash.
+func (c *Config) AgentHasHash(hash string) bool {
+	if hash == "" {
+		return false
+	}
+	for _, a := range c.Agents {
+		if a.TokenSHA256 == hash {
+			return true
+		}
+	}
+	return false
+}
+
+func checkAdminServer(s string) error {
+	if s == "" {
+		return nil
+	}
+	ap, err := netip.ParseAddrPort(s)
+	if err != nil || !ap.Addr().IsLoopback() {
+		return errors.New("admin.server must be a loopback address, for example 127.0.0.1:8788")
 	}
 	return nil
 }
@@ -168,6 +216,16 @@ func checkListen(l string) error {
 		return errors.New("agent.listen must not bind all interfaces")
 	}
 	return nil
+}
+
+// Requires2FA reports whether an approval for this item id must include an authenticator code.
+func (c *Config) Requires2FA(itemID string) bool {
+	for _, id := range c.TwoFA.Items {
+		if id == itemID {
+			return true
+		}
+	}
+	return false
 }
 
 // AgentListenIsTailnet reports whether the agent API listens on a tailnet address.
