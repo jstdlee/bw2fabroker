@@ -422,22 +422,11 @@ No open questions block milestone 1.
   broker's own handler, with a captured link, not an iPhone.
 - Bitwarden cloud is still a manual check before a release (§16).
 - The admin panel has handler tests for token separation, not a browser pass.
-- The systemd unit and the compose Tailscale sidecar are documented and not what this host
-  runs. This host uses host networking and the host `tailscaled` socket. CI builds the image
-  and checks `broker version` and `bw --version`. It does not boot the image against Tailscale.
+- The systemd unit and the compose Tailscale sidecar are documented and not exercised.
+  CI builds the image and checks `broker version` and `bw --version`. It does not boot
+  the image against Tailscale.
 - §16's check that the agent's OS user cannot read the config or the broker's memory is a
   deployment check, not a test. Saved config is mode 0600.
 - After the agent listener moves off the unix socket, old clients must set `BROKER_URL` to the
   tailnet HTTP address, and a restarted broker stays locked until `broker unlock`.
 
-### This host
-
-Recorded here so the next session does not rediscover it. None of these values are in git.
-
-- The image was rebuilt from this tree. The container has no `BROKER_TOKEN_FILE` and no CLI that
-  can mint an agent token.
-- The host config (outside this repo) binds the agent API to the tailnet address instead of
-  `unix:/data/run/agent.sock`.
-- That process is locked until `docker exec -it bw2fabroker broker unlock`.
-- The ntfy user's password was changed on the ntfy server. The broker still sends with the
-  bearer token already in its config, and that token still gets HTTP 200.
