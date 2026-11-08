@@ -1,0 +1,43 @@
+[Unit]
+Description=bw2fabroker: Bitwarden access broker with phone approval
+Documentation=https://github.com/jstdlee/bw2fabroker
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=broker
+Group=broker
+Environment=BROKER_CONFIG=/etc/bw2fabroker/config.toml
+Environment=HOME=/var/lib/bw2fabroker
+Environment=BITWARDENCLI_APPDATA_DIR=/var/lib/bw2fabroker/bw
+ExecStart=/usr/local/bin/broker start
+Restart=always
+RestartSec=10
+
+# /run/bw2fabroker holds admin.sock (0600, broker only) and agent.sock (0660, group broker-clients).
+RuntimeDirectory=bw2fabroker
+RuntimeDirectoryMode=0755
+StateDirectory=bw2fabroker
+StateDirectoryMode=0700
+
+# Hardening. The bw CLI is Node.js, which needs writable and executable memory, so
+# MemoryDenyWriteExecute is not set.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+LimitCORE=0
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

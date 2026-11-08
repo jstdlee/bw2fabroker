@@ -1,0 +1,3 @@
+# systemd-sysusers: the broker's own user, and the group whose members may use the agent socket.
+u broker - "bw2fabroker" /var/lib/bw2fabroker /usr/sbin/nologin
+g broker-clients -

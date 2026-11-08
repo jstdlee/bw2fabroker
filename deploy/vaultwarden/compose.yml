@@ -1,0 +1,18 @@
+# A Bitwarden-compatible server on this machine. The broker does not share its network.
+# Put TLS in front before any client other than this host uses it.
+# After the agents account exists, set SIGNUPS_ALLOWED back to "false".
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    restart: unless-stopped
+    environment:
+      SIGNUPS_ALLOWED: "true"
+      DOMAIN: ${VW_DOMAIN:-http://127.0.0.1:8080}
+      WEBSOCKET_ENABLED: "true"
+    volumes:
+      - vw-data:/data
+    ports:
+      - "127.0.0.1:8080:80"
+
+volumes:
+  vw-data:

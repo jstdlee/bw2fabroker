@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 440" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
+  <rect width="980" height="440" fill="#f5f5f7"/>
+  <g fill="#fff" stroke="#d2d2d7">
+    <rect x="36" y="36" width="190" height="140" rx="18"/>
+    <rect x="276" y="36" width="190" height="140" rx="18"/>
+    <rect x="516" y="36" width="190" height="140" rx="18"/>
+    <rect x="756" y="36" width="190" height="140" rx="18"/>
+  </g>
+  <g fill="#1d1d1f" font-size="15" text-anchor="middle">
+    <text x="131" y="74" font-size="20" font-weight="700">Agent</text>
+    <text x="131" y="108">Holds a bearer token.</text>
+    <text x="131" y="132">Never the vault.</text>
+    <text x="371" y="74" font-size="20" font-weight="700">Broker</text>
+    <text x="371" y="108">Holds the Bitwarden</text>
+    <text x="371" y="132">session in memory.</text>
+    <text x="611" y="74" font-size="20" font-weight="700">Your ntfy</text>
+    <text x="611" y="108">Item name and reason.</text>
+    <text x="611" y="132">Never the value.</text>
+    <text x="851" y="74" font-size="20" font-weight="700">Phone</text>
+    <text x="851" y="108">Approval password.</text>
+    <text x="851" y="132">Not the master password.</text>
+  </g>
+  <g fill="#0071e3" stroke="#0071e3" stroke-width="1.5" font-size="13" text-anchor="middle">
+    <line x1="226" y1="90" x2="266" y2="90"/>
+    <polygon points="266,90 256,85 256,95"/>
+    <text x="246" y="82">ask</text>
+    <line x1="466" y1="90" x2="506" y2="90"/>
+    <polygon points="506,90 496,85 496,95"/>
+    <text x="486" y="82">push</text>
+    <line x1="706" y1="90" x2="746" y2="90"/>
+    <polygon points="746,90 736,85 736,95"/>
+    <text x="726" y="82">open</text>
+    <path d="M851 176 C851 230 371 230 371 176" fill="none"/>
+    <polygon points="371,176 366,188 376,188"/>
+    <text x="611" y="248">approve</text>
+  </g>
+  <g fill="#1d1d1f" stroke="#1d1d1f" stroke-width="1.5" font-size="13" text-anchor="middle">
+    <line x1="266" y1="150" x2="230" y2="150"/>
+    <polygon points="230,150 240,145 240,155"/>
+    <text x="248" y="168" stroke="none">value, once</text>
+  </g>
+  <text x="490" y="310" text-anchor="middle" fill="#1d1d1f" font-size="18">A stolen agent token can ask. It cannot read.</text>
+  <text x="490" y="342" text-anchor="middle" fill="#6e6e73" font-size="15">The broker sends the value only after the approval password.</text>
+  <text x="490" y="366" text-anchor="middle" fill="#6e6e73" font-size="15">Anyone who owns the broker host owns the vault session.</text>
+</svg>

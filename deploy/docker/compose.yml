@@ -1,0 +1,52 @@
+# Docker mode: a Tailscale sidecar is the broker's own tailnet node; the broker shares its network.
+# Usage: see deploy/docker/README.md
+services:
+  tailscale:
+    image: tailscale/tailscale:v1.88.2
+    hostname: bw2fabroker
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false" # kernel networking: the broker binds the tailnet IP directly
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - ts-socket:/var/run/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add: [NET_ADMIN, NET_RAW]
+    restart: unless-stopped
+
+  broker:
+    build:
+      context: ../..
+    image: bw2fabroker:local
+    network_mode: service:tailscale
+    depends_on: [tailscale]
+    environment:
+      BROKER_APPROVAL_PASSWORD: ${BROKER_APPROVAL_PASSWORD:-}
+      BROKER_ADMIN_TOKEN: ${BROKER_ADMIN_TOKEN:-}
+      BROKER_NTFY_URL: ${BROKER_NTFY_URL:-}
+      BROKER_NTFY_DOMAIN: ${BROKER_NTFY_DOMAIN:-}
+      BROKER_NTFY_TOPIC: ${BROKER_NTFY_TOPIC:-}
+      BROKER_NTFY_TOKEN: ${BROKER_NTFY_TOKEN:-}
+      BROKER_BIND_HOST: ${BROKER_BIND_HOST:-}
+      BROKER_BIND_PORT: ${BROKER_BIND_PORT:-}
+      BROKER_PUBLIC_HOST: ${BROKER_PUBLIC_HOST:-}
+      BW_MASTER_PASSWORD: ${BW_MASTER_PASSWORD:-}
+      BW_SERVER: ${BW_SERVER:-}
+    volumes:
+      - broker-data:/data
+      - ts-socket:/var/run/tailscale
+      - ./agent:/agent # agent socket for agents on this host (see README)
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+volumes:
+  ts-state:
+  ts-socket:
+  broker-data:
