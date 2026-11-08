@@ -405,24 +405,28 @@ No open questions block milestone 1.
   It does not hold a value or a password.
 - `broker demo` serves a fake vault on localhost, with the same approval page.
 - `go test -tags e2e ./e2e` starts Vaultwarden in Docker, registers an account in the current
-  master-password unlock shape, logs in with `bw` 2026.10.0, and reads one field through the
-  broker's vault adapter. The test refuses to run if that would touch a production `data.json`.
-- `go test ./...` covers the contract, the handlers, admin and agent token separation, the ntfy
-  domain checks, and the vault adapter against a fake `bw`.
+  master-password unlock shape, and logs in with `bw` 2026.10.0. It then asks for the login
+  password, approves that request on the tailnet page, and checks the value is returned once.
+  Notes, a custom field, the URI, an attachment, a card number, and an identity email are read
+  through the broker. The audit log and the broker log must not contain those values, the master
+  password, or the approval password. The test refuses to run if that would touch a production
+  `data.json`. CI runs this job.
+- `go test ./...` covers the contract, the handlers (including approve-once, expiry, lockout,
+  separate listeners, and a forged link), admin and agent token separation, the ntfy domain
+  checks, `broker-get` exit codes, and `--env` redacting the value. The vault adapter test reads
+  notes, card, identity, and an attachment from a fake `bw`.
 
 ### Gaps
 
-- No test runs the phone path: agent request, own-domain ntfy push, tailnet approval page, one
-  value returned. The disposable-vault test stops at `bw` login and one field read.
-- Vaultwarden is a local Docker test, not a CI job. Bitwarden cloud is still a manual check
-  before a release (§16).
-- `notes`, `card`, `identity`, and `attachment` are in the contract and the adapter. They are
-  not in the disposable-vault test.
+- No test sends a push to a real phone. The approval page in the disposable-vault test is the
+  broker's own handler, with a captured link, not an iPhone.
+- Bitwarden cloud is still a manual check before a release (§16).
 - The admin panel has handler tests for token separation, not a browser pass.
 - The systemd unit and the compose Tailscale sidecar are documented and not what this host
-  runs. This host uses host networking and the host `tailscaled` socket.
+  runs. This host uses host networking and the host `tailscaled` socket. CI builds the image
+  and checks `broker version` and `bw --version`. It does not boot the image against Tailscale.
 - §16's check that the agent's OS user cannot read the config or the broker's memory is a
-  deployment check, not a test.
+  deployment check, not a test. Saved config is mode 0600.
 - After the agent listener moves off the unix socket, old clients must set `BROKER_URL` to the
   tailnet HTTP address, and a restarted broker stays locked until `broker unlock`.
 

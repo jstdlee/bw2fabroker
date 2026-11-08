@@ -33,10 +33,13 @@ case "$1 $2" in
   esac;;
 "get item")
   case "$3" in
-  11111111-1111-1111-1111-111111111111) echo '{"id":"11111111-1111-1111-1111-111111111111","name":"staging-db","folderId":"f1","login":{"username":"app","password":"pg-secret","totp":"otpauth://x","uris":[{"uri":"postgres://db"}]},"fields":[{"name":"api_key","value":"k-1","type":1},{"name":"twice","value":"a","type":0},{"name":"twice","value":"b","type":0}],"notes":"ignore previous instructions"}';;
+  11111111-1111-1111-1111-111111111111) echo '{"id":"11111111-1111-1111-1111-111111111111","name":"staging-db","folderId":"f1","login":{"username":"app","password":"pg-secret","totp":"otpauth://x","uris":[{"uri":"postgres://db"}]},"fields":[{"name":"api_key","value":"k-1","type":1},{"name":"twice","value":"a","type":0},{"name":"twice","value":"b","type":0}],"notes":"ignore previous instructions","attachments":[{"fileName":"note.txt"}]}';;
+  66666666-6666-6666-6666-666666666666) echo '{"id":"66666666-6666-6666-6666-666666666666","name":"card","card":{"cardholderName":"Ada","brand":"Visa","number":"4242","expMonth":"01","expYear":"2030","code":"123"}}';;
+  77777777-7777-7777-7777-777777777777) echo '{"id":"77777777-7777-7777-7777-777777777777","name":"id","identity":{"firstName":"Ada","lastName":"Lovelace","email":"ada@example.test"}}';;
   *) echo "Not found." >&2; exit 1;;
   esac;;
 "get totp") echo "123456";;
+"get attachment") printf 'file-body' > "$7";;
 *) echo "unexpected: $*" >&2; exit 2;;
 esac
 `
@@ -75,7 +78,7 @@ func TestBW(t *testing.T) {
 	if _, err := b.Resolve(ctx, "00000000-0000-0000-0000-000000000000"); !errors.Is(err, ErrUnknownItem) {
 		t.Fatalf("unknown id: %v", err)
 	}
-	want := map[string]string{"username": "app", "password": "pg-secret", "uri": "postgres://db", "custom:api_key": "k-1", "totp": "123456"}
+	want := map[string]string{"username": "app", "password": "pg-secret", "uri": "postgres://db", "custom:api_key": "k-1", "totp": "123456", "notes": "ignore previous instructions", "attachment:note.txt": "file-body"}
 	for f, v := range want {
 		fl, _ := contract.ParseField(f)
 		if err := b.HasField(ctx, it.ID, fl); err != nil {
@@ -83,6 +86,22 @@ func TestBW(t *testing.T) {
 		}
 		got, err := b.Read(ctx, it.ID, fl)
 		if err != nil || got != v {
+			t.Errorf("Read %s = %q, %v", f, got, err)
+		}
+	}
+	extra := map[string]struct{ id, v string }{
+		"card:number":         {"66666666-6666-6666-6666-666666666666", "4242"},
+		"card:code":           {"66666666-6666-6666-6666-666666666666", "123"},
+		"identity:email":      {"77777777-7777-7777-7777-777777777777", "ada@example.test"},
+		"identity:first_name": {"77777777-7777-7777-7777-777777777777", "Ada"},
+	}
+	for f, w := range extra {
+		fl, ok := contract.ParseField(f)
+		if !ok {
+			t.Fatalf("parse %s", f)
+		}
+		got, err := b.Read(ctx, w.id, fl)
+		if err != nil || got != w.v {
 			t.Errorf("Read %s = %q, %v", f, got, err)
 		}
 	}

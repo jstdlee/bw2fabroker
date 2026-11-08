@@ -206,10 +206,13 @@ func (b *BW) readAttachment(ctx context.Context, itemID, name string) (string, e
 		return "", err
 	}
 	defer os.RemoveAll(dir)
-	if _, err := b.run(ctx, true, nil, "get", "attachment", name, "--itemid", itemID, "--output", dir); err != nil {
+	// bw treats an --output path that does not end in a separator as the file
+	// itself. A directory path makes it try to write the directory as a file.
+	outPath := filepath.Join(dir, name)
+	if _, err := b.run(ctx, true, nil, "get", "attachment", name, "--itemid", itemID, "--output", outPath); err != nil {
 		return "", err
 	}
-	f, err := os.Open(filepath.Join(dir, name))
+	f, err := os.Open(outPath)
 	if err != nil {
 		return "", ErrNoField
 	}

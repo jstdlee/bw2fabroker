@@ -22,3 +22,15 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build -t bw2fabroker:ci .
       - run: docker run --rm --entrypoint sh bw2fabroker:ci -c 'broker version && bw --version'
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g --no-fund --no-audit @bitwarden/cli@2026.10.0
+      - run: go test -tags e2e -count=1 -timeout 240s ./e2e/

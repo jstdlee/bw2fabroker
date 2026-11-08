@@ -20,10 +20,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +33,7 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 
 	"github.com/jstdlee/bw2fabroker/internal/api"
+	"github.com/jstdlee/bw2fabroker/internal/audit"
 	"github.com/jstdlee/bw2fabroker/internal/auth"
 	"github.com/jstdlee/bw2fabroker/internal/config"
 	"github.com/jstdlee/bw2fabroker/internal/contract"
@@ -43,6 +46,14 @@ const (
 	e2ePassword = "e2e-master-password"
 	e2eSecret   = "e2e-secret-value"
 	e2eItem     = "e2e-item"
+	e2eNote     = "e2e-note-value"
+	e2eCustom   = "e2e-custom-value"
+	e2eURI      = "postgres://db.example.test"
+	e2eCard     = "4242424242424242"
+	e2eMail     = "ada@e2e.example"
+	e2eFileBody = "e2e-attachment-body"
+	e2eApprove  = "e2e-approve-password"
+	e2eFileName = "e2e.txt"
 )
 
 // localClient trusts the test's own loopback certificate. It is not used for any other host.
@@ -94,6 +105,8 @@ func TestDisposableVault(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = exec.Command("docker", "rm", "-f", name).Run()
+		_ = exec.Command("docker", "run", "--rm", "-v", data+":/data", "--entrypoint", "chown",
+			"vaultwarden/server:latest", "-R", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "/data").Run()
 		if got := fileStamp(prod); got != before {
 			t.Errorf("production Bitwarden data changed: %s -> %s", before, got)
 		}
@@ -108,15 +121,37 @@ func TestDisposableVault(t *testing.T) {
 	if session == "" {
 		t.Fatal("bw login returned no session")
 	}
-	itemJSON := `{"type":1,"name":"` + e2eItem + `","login":{"username":"app","password":"` + e2eSecret + `"}}`
-	bw(t, app, session, "sync")
-	created := bw(t, app, session, "create", "item", base64.StdEncoding.EncodeToString([]byte(itemJSON)))
-	var createdItem struct {
-		ID string `json:"id"`
+	loginID := createItem(t, app, session, map[string]any{
+		"type":  1,
+		"name":  e2eItem,
+		"notes": e2eNote,
+		"login": map[string]any{
+			"username": "app",
+			"password": e2eSecret,
+			"uris":     []map[string]string{{"uri": e2eURI}},
+		},
+		"fields": []map[string]any{{"name": "api_key", "value": e2eCustom, "type": 0}},
+	})
+	cardID := createItem(t, app, session, map[string]any{
+		"type": 3,
+		"name": "e2e-card",
+		"card": map[string]string{
+			"cardholderName": "Ada", "brand": "Visa", "number": e2eCard,
+			"expMonth": "01", "expYear": "2030", "code": "123",
+		},
+	})
+	idID := createItem(t, app, session, map[string]any{
+		"type": 4,
+		"name": "e2e-id",
+		"identity": map[string]string{
+			"firstName": "Ada", "lastName": "Lovelace", "email": e2eMail,
+		},
+	})
+	file := filepath.Join(dir, e2eFileName)
+	if err := os.WriteFile(file, []byte(e2eFileBody), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if err := json.Unmarshal([]byte(created), &createdItem); err != nil || createdItem.ID == "" {
-		t.Fatalf("create item: %s", created)
-	}
+	bw(t, app, session, "create", "attachment", "--file", file, "--itemid", loginID)
 	bw(t, app, session, "sync")
 
 	key, err := auth.NewKey(32)
@@ -127,11 +162,23 @@ func TestDisposableVault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pwHash, err := auth.HashPassword(e2eApprove)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := &config.Config{
-		HMACKey: key,
-		Agents:  map[string]config.Agent{"e2e": {TokenSHA256: hash}},
-		Auto:    []config.AutoRule{{ItemID: createdItem.ID}},
-		Vault:   config.Vault{BWPath: "bw", AppData: app},
+		HMACKey:          key,
+		ApprovalPassword: pwHash,
+		Agents:           map[string]config.Agent{"e2e": {TokenSHA256: hash}},
+		Auto: []config.AutoRule{
+			{ItemID: cardID},
+			{ItemID: idID},
+			{ItemID: loginID, Field: "notes"},
+			{ItemID: loginID, Field: "uri"},
+			{ItemID: loginID, Field: "custom:api_key"},
+			{ItemID: loginID, Field: "attachment:" + e2eFileName},
+		},
+		Vault: config.Vault{BWPath: "bw", AppData: app},
 	}
 	cfg.Defaults()
 	vw := vault.NewBW("bw", app)
@@ -142,14 +189,110 @@ func TestDisposableVault(t *testing.T) {
 	}
 	t.Cleanup(func() { vw.Lock() })
 
-	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	link, err := auth.NewLinker(key)
+	var logBuf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	linker, err := auth.NewLinker(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := api.New(func() *config.Config { return cfg }, vw, quietNotify{}, link, log)
-	body := `{"item":"` + e2eItem + `","field":"password","reason":"e2e disposable vault"}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/requests", strings.NewReader(body))
+	notes := &capNotify{}
+	srv := api.New(func() *config.Config { return cfg }, vw, notes, linker, log)
+	srv.SetApproverBase("http://100.64.0.1:8787")
+	alog, err := audit.Open(filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Audit = alog
+
+	pending := agentCall(t, srv, tok, http.MethodPost, "/v1/requests", `{"item":"`+e2eItem+`","field":"password","reason":"e2e ask path"}`)
+	if pending.Status != contract.StatusPending || pending.RequestID == nil {
+		t.Fatalf("want pending, got %+v", pending)
+	}
+	notes.mu.Lock()
+	click := notes.click
+	notes.mu.Unlock()
+	u, err := url.Parse(click)
+	if err != nil || u.Path == "" {
+		t.Fatalf("approval link: %q", click)
+	}
+	approve(t, srv, u.Path)
+	got := agentCall(t, srv, tok, http.MethodGet, "/v1/requests/"+*pending.RequestID+"/wait", "")
+	if got.Status != contract.StatusApproved || got.Value == nil || *got.Value != e2eSecret {
+		t.Fatalf("ask path: %+v", got)
+	}
+	again := agentCall(t, srv, tok, http.MethodGet, "/v1/requests/"+*pending.RequestID+"/wait", "")
+	if again.Status != contract.StatusDenied || again.Code == nil || *again.Code != contract.CodeUnknownRequest || again.Value != nil {
+		t.Fatalf("value delivered twice: %+v", again)
+	}
+
+	auto := map[string]string{
+		"notes":                     e2eNote,
+		"uri":                       e2eURI,
+		"custom:api_key":            e2eCustom,
+		"attachment:" + e2eFileName: e2eFileBody,
+	}
+	for field, value := range auto {
+		resp := agentCall(t, srv, tok, http.MethodPost, "/v1/requests", `{"item":"`+e2eItem+`","field":"`+field+`","reason":"e2e field"}`)
+		if resp.Status != contract.StatusApproved || resp.Code == nil || *resp.Code != contract.CodeAuto || resp.Value == nil || *resp.Value != value {
+			t.Fatalf("%s: %+v", field, resp)
+		}
+	}
+	card := agentCall(t, srv, tok, http.MethodPost, "/v1/requests", `{"item":"e2e-card","field":"card:number","reason":"e2e card"}`)
+	if card.Status != contract.StatusApproved || card.Value == nil || *card.Value != e2eCard {
+		t.Fatalf("card: %+v", card)
+	}
+	ident := agentCall(t, srv, tok, http.MethodPost, "/v1/requests", `{"item":"e2e-id","field":"identity:email","reason":"e2e identity"}`)
+	if ident.Status != contract.StatusApproved || ident.Value == nil || *ident.Value != e2eMail {
+		t.Fatalf("identity: %+v", ident)
+	}
+
+	logged, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := string(logged) + logBuf.String()
+	for _, secret := range []string{e2eSecret, e2ePassword, e2eApprove, e2eNote, e2eCustom, e2eCard, e2eMail, e2eFileBody} {
+		if strings.Contains(blob, secret) {
+			t.Fatalf("audit or log contains %q", secret)
+		}
+	}
+}
+
+type capNotify struct {
+	mu    sync.Mutex
+	click string
+}
+
+func (c *capNotify) Send(_ context.Context, m notify.Message) error {
+	c.mu.Lock()
+	c.click = m.Click
+	c.mu.Unlock()
+	return nil
+}
+
+func createItem(t *testing.T, app, session string, item any) string {
+	t.Helper()
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := bw(t, app, session, "create", "item", base64.StdEncoding.EncodeToString(raw))
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &created); err != nil || created.ID == "" {
+		t.Fatalf("create item: %s", out)
+	}
+	return created.ID
+}
+
+func agentCall(t *testing.T, srv *api.Server, tok, method, path, body string) contract.Response {
+	t.Helper()
+	var rd io.Reader
+	if body != "" {
+		rd = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, rd)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	w := httptest.NewRecorder()
 	srv.AgentHandler().ServeHTTP(w, req)
@@ -157,17 +300,24 @@ func TestDisposableVault(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("response: %s", w.Body.String())
 	}
-	if resp.Status != contract.StatusApproved || resp.Value == nil || *resp.Value != e2eSecret {
-		t.Fatalf("want the disposable item, got %s", w.Body.String())
+	if err := resp.Valid(); err != nil {
+		t.Fatalf("invalid response %s: %v", w.Body.String(), err)
 	}
-	if resp.Code == nil || *resp.Code != contract.CodeAuto {
-		t.Fatalf("want auto, got %s", w.Body.String())
-	}
+	return resp
 }
 
-type quietNotify struct{}
-
-func (quietNotify) Send(context.Context, notify.Message) error { return nil }
+func approve(t *testing.T, srv *api.Server, linkPath string) {
+	t.Helper()
+	form := url.Values{"password": {e2eApprove}}
+	req := httptest.NewRequest(http.MethodPost, linkPath+"/approve", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = "100.70.1.2:51000"
+	w := httptest.NewRecorder()
+	srv.ApproverHandler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Approved") {
+		t.Fatalf("approve: %d %s", w.Code, w.Body.String())
+	}
+}
 
 func waitAlive(t *testing.T, base string) {
 	t.Helper()
