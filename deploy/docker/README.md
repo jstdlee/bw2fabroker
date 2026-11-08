@@ -29,6 +29,11 @@ docker compose exec -it broker broker unlock                 # master password o
 docker compose exec broker broker doctor
 ```
 
+The Bitwarden server can be cloud, Vaultwarden, or Bitwarden's own self-hosted install.
+Set it in the admin panel (Bitwarden server) or with `BW_SERVER`. See
+[deploy/vaultwarden](../vaultwarden/README.md). Plain HTTP is accepted only for localhost,
+a private address, or a tailnet address.
+
 The broker starts **locked** after every restart. Until you run `broker unlock`, agents get
 `rejected` / `locked`, and your phone gets one "bw2fabroker is locked" push.
 

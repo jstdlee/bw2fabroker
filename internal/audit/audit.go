@@ -22,10 +22,10 @@ type Event struct {
 
 // Day is one calendar day of counts, plus bar heights for the admin chart.
 type Day struct {
-	Label                        string
-	Approved, Denied, Rejected   int
-	Other                        int
-	HA, HD, HR, HO               int
+	Label                      string
+	Approved, Denied, Rejected int
+	Other                      int
+	HA, HD, HR, HO             int
 }
 
 // Report is the last 7 days, oldest first.

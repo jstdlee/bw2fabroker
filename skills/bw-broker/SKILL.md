@@ -9,6 +9,8 @@ The user keeps secrets in Bitwarden. You never get the vault. You ask the **brok
 one item. The user approves or denies the request on their phone. You get the value once, or a final
 "no".
 
+If `broker-get` is not the interface, use [the HTTP API](../bw-broker-http/SKILL.md) or [the MCP server](../bw-broker-mcp/SKILL.md). The rules below still apply.
+
 The broker enforces every rule below. If you break one, the request fails. Follow them so that the
 user sees few prompts and you do not waste approvals.
 

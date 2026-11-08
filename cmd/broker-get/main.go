@@ -12,24 +12,19 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
-	"time"
 
+	"github.com/jstdlee/bw2fabroker/internal/agentapi"
 	"github.com/jstdlee/bw2fabroker/internal/contract"
 )
-
-const defaultURL = "unix:/run/bw2fabroker/agent.sock"
 
 var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 
@@ -179,48 +174,8 @@ func runWithEnv(o options, value string) int {
 	}
 	return 0
 }
-
-func token() (string, error) {
-	if t := os.Getenv("BROKER_TOKEN"); t != "" {
-		return strings.TrimSpace(t), nil
-	}
-	if p := os.Getenv("BROKER_TOKEN_FILE"); p != "" {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return "", err
-		}
-		return strings.TrimSpace(string(b)), nil
-	}
-	return "", errors.New("set BROKER_TOKEN or BROKER_TOKEN_FILE")
-}
-
-func client() (*http.Client, string, error) {
-	u := os.Getenv("BROKER_URL")
-	if u == "" {
-		u = defaultURL
-	}
-	if path, ok := strings.CutPrefix(u, "unix:"); ok {
-		tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", path)
-		}}
-		return &http.Client{Transport: tr, Timeout: 65 * time.Second}, "http://broker", nil
-	}
-	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
-		return nil, "", errors.New("BROKER_URL must be unix:/path or http(s)://host:port")
-	}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.Proxy = nil // the broker is local or on the tailnet; never send the token through a proxy
-	return &http.Client{Transport: tr, Timeout: 65 * time.Second}, strings.TrimSuffix(u, "/"), nil
-}
-
 func catalog(o options) int {
-	tok, err := token()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "broker-get:", err)
-		return 2
-	}
-	c, base, err := client()
+	c, err := agentapi.FromEnv()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "broker-get:", err)
 		return 2
@@ -229,20 +184,9 @@ func catalog(o options) int {
 	if o.query != "" {
 		path = "/v1/search?q=" + urlQuery(o.query)
 	}
-	req, err := http.NewRequest(http.MethodGet, base+path, nil)
+	raw, err := c.Catalog(context.Background(), path)
 	if err != nil {
-		return 2
-	}
-	req.Header.Set("Authorization", "Bearer "+tok)
-	res, err := c.Do(req)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "broker-get: cannot reach the broker:", err)
-		return 2
-	}
-	defer res.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-	if err != nil || res.StatusCode != http.StatusOK {
-		fmt.Fprintln(os.Stderr, "broker-get: list failed")
+		fmt.Fprintln(os.Stderr, "broker-get:", err)
 		return 2
 	}
 	fmt.Println(string(raw))
@@ -255,92 +199,26 @@ func urlQuery(s string) string {
 }
 
 func fetch(o options) contract.Response {
-	tok, err := token()
+	c, err := agentapi.FromEnv()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "broker-get:", err)
-		return contract.Rejected("", contract.CodeUnauthorized)
-	}
-	c, base, err := client()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "broker-get:", err)
-		return internalErr("")
-	}
-	body, _ := json.Marshal(contract.Request{Item: o.item, Field: o.field, Reason: o.reason})
-	resp, ok := call(c, http.MethodPost, base+"/v1/requests", tok, body)
-	if !ok {
-		return internalErr("")
-	}
-	deadline := time.Now().Add(150 * time.Second)
-	for resp.Status == contract.StatusPending {
-		if resp.RequestID == nil || time.Now().After(deadline) {
+		if strings.Contains(err.Error(), "BROKER_URL") {
 			return internalErr("")
 		}
-		id := *resp.RequestID
-		next, ok := call(c, http.MethodGet, base+"/v1/requests/"+id+"/wait", tok, nil)
-		if !ok {
-			return internalErr(id)
+		return contract.Rejected("", contract.CodeUnauthorized)
+	}
+	resp, err := c.Fetch(context.Background(), o.item, o.field, o.reason)
+	if err != nil {
+		if errors.Is(err, agentapi.ErrContract) {
+			fmt.Fprintln(os.Stderr, "broker-get: the broker answered outside the contract; ignoring it")
+		} else {
+			fmt.Fprintln(os.Stderr, "broker-get:", err)
 		}
-		if next.RequestID != nil && *next.RequestID != id {
-			return internalErr(id)
-		}
-		resp = next
+		return internalErr("")
 	}
 	return resp
 }
 
-// call does one request and accepts only a body that follows the contract exactly.
-func call(c *http.Client, method, url, tok string, body []byte) (contract.Response, bool) {
-	var rd io.Reader
-	if body != nil {
-		rd = bytes.NewReader(body)
-	}
-	req, err := http.NewRequest(method, url, rd)
-	if err != nil {
-		return contract.Response{}, false
-	}
-	req.Header.Set("Authorization", "Bearer "+tok)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	res, err := c.Do(req)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "broker-get: cannot reach the broker:", err)
-		return contract.Response{}, false
-	}
-	defer res.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(res.Body, contract.MaxValueBytes*2+1024))
-	if err != nil {
-		return contract.Response{}, false
-	}
-	r, err := strictDecode(raw)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "broker-get: the broker answered outside the contract; ignoring it")
-		return contract.Response{}, false
-	}
-	return r, true
-}
-
 func strictDecode(raw []byte) (contract.Response, error) {
-	var keys map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &keys); err != nil {
-		return contract.Response{}, err
-	}
-	if len(keys) != 4 {
-		return contract.Response{}, errors.New("wrong keys")
-	}
-	for _, k := range []string{"request_id", "status", "code", "value"} {
-		if _, ok := keys[k]; !ok {
-			return contract.Response{}, errors.New("missing key " + k)
-		}
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	var r contract.Response
-	if err := dec.Decode(&r); err != nil {
-		return contract.Response{}, err
-	}
-	if err := r.Valid(); err != nil {
-		return contract.Response{}, err
-	}
-	return r, nil
+	return agentapi.Decode(raw)
 }

@@ -32,4 +32,3 @@ func TestTOTPRoundTrip(t *testing.T) {
 		t.Fatal(code, err)
 	}
 }
-

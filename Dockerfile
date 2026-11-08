@@ -5,7 +5,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/ ./cmd/broker ./cmd/broker-get
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/ ./cmd/broker ./cmd/broker-get ./cmd/broker-mcp
 
 FROM node:22.20.0-bookworm-slim
 ARG BW_VERSION=2026.10.0
@@ -17,7 +17,7 @@ RUN apt-get update \
  && useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin broker \
  && mkdir -p /data /agent \
  && chown broker:broker /data /agent
-COPY --from=build /out/broker /out/broker-get /usr/local/bin/
+COPY --from=build /out/broker /out/broker-get /out/broker-mcp /usr/local/bin/
 ENV BROKER_CONFIG=/data/config/config.toml \
     BROKER_ADMIN_SOCKET=/data/run/admin.sock \
     BITWARDENCLI_APPDATA_DIR=/data/bw \

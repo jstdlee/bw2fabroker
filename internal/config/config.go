@@ -168,6 +168,9 @@ func (c *Config) Validate() error {
 			return errors.New("auto rule for totp is not allowed")
 		}
 	}
+	if err := ValidVaultServer(c.Vault.Server); err != nil {
+		return err
+	}
 	if err := checkAdminServer(c.Admin.Server); err != nil {
 		return err
 	}

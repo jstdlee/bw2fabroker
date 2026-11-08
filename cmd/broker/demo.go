@@ -210,12 +210,15 @@ var inboxPage = template.Must(template.New("inbox").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><title>bw2fabroker demo</title>
 <style>
-:root{color-scheme:light dark;--bg:#fff;--fg:#111;--muted:#666;--line:#ddd}
-@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#eee;--muted:#999;--line:#333}}
-body{background:var(--bg);color:var(--fg);font:16px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:16px;max-width:640px}
-h1{font-size:20px} li{margin:0 0 12px} .small{color:var(--muted);font-size:14px}
-a{overflow-wrap:anywhere}
-</style></head><body>
+:root{color-scheme:light;--bg:#f5f5f7;--fg:#1d1d1f;--muted:#6e6e73}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.47 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
+main{max-width:36rem;margin:0 auto;padding:2.5rem 1.25rem 4rem}
+h1{font-size:2rem;font-weight:700;letter-spacing:-.022em;line-height:1.1;margin:0 0 .4rem}
+li{background:#fff;border-radius:18px;box-shadow:0 1px 2px rgba(0,0,0,.04),0 12px 32px rgba(0,0,0,.06);list-style:none;padding:1rem 1.1rem;margin:0 0 .8rem}
+ul{padding:0}
+.small{color:var(--muted);font-size:.9rem}
+a{color:#0071e3}
+</style></head><body><main>
 <h1>bw2fabroker demo</h1>
 <p class="small">Fake vault. Approval password was printed in the terminal that started <code>broker demo</code>. This page is not ntfy.</p>
 {{if .}}
@@ -229,7 +232,7 @@ a{overflow-wrap:anywhere}
 {{else}}
 <p>No requests yet. Ask with <code>broker-get</code>; the link shows up here.</p>
 {{end}}
-</body></html>`))
+</main></body></html>`))
 
 func (d *demoInbox) page(w http.ResponseWriter, _ *http.Request) {
 	d.mu.Lock()

@@ -172,10 +172,10 @@ fixed codes) and turns anything else into `rejected` / `internal_error`:
   organization collection, shared only with this account. The broker logs in as this account, never
   as your main account. Vaultwarden supports organizations without a licence; on Bitwarden cloud a
   free organization (2 users, 2 collections) is enough.
-- Server: self-hosted Vaultwarden / Bitwarden, or Bitwarden cloud, chosen with
-  `bw config server <url>`.
-- Once, as the broker user: `bw config server ...` and `bw login --apikey` with the agents account's
-  API key.
+- Server: Bitwarden cloud, Vaultwarden, or Bitwarden's own self-hosted server. The URL is
+  `vault.server` (or `BW_SERVER`). The admin panel and `broker start` run `bw config server`.
+  HTTPS, or HTTP only for localhost, a private address, or a tailnet address.
+- Once, as the broker user: `bw login --apikey` with the agents account's API key.
 - `broker start` (app mode) or `broker unlock` (Docker) asks for the **agents account's** master
   password on a prompt the broker owns (its TTY or `systemd-ask-password`), runs `bw unlock --raw`,
   and keeps `BW_SESSION` in memory only **[R12]**.
@@ -415,6 +415,7 @@ No open questions block milestone 1.
   separate listeners, and a forged link), admin and agent token separation, the ntfy domain
   checks, `broker-get` exit codes, and `--env` redacting the value. The vault adapter test reads
   notes, card, identity, and an attachment from a fake `bw`.
+- `broker-mcp` is a stdio MCP server (`list_items`, `search_items`, `request_field`) over the same HTTP API. `broker-get` and `broker-mcp` share `internal/agentapi`.
 
 ### Gaps
 

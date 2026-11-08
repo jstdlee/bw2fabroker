@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -21,19 +22,41 @@ var adminPage = template.Must(template.New("admin").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>bw2fabroker admin</title>
 <style>
-:root { color-scheme: light dark; }
-body { font: 16px/1.45 ui-sans-serif, system-ui, sans-serif; max-width: 40rem; margin: 1.5rem auto; padding: 0 1rem; }
-h1 { font-size: 1.35rem; font-weight: 650; margin-bottom: .2rem; }
-h2 { font-size: 1.05rem; margin: 0 0 .35rem; }
-p, li { margin: .35rem 0; }
-section { border-top: 1px solid CanvasText; padding: .85rem 0; }
-label { display: block; margin: .5rem 0 .15rem; }
+:root {
+  color-scheme: light;
+  --bg: #f5f5f7;
+  --card: #fff;
+  --fg: #1d1d1f;
+  --muted: #6e6e73;
+  --line: rgba(0,0,0,.08);
+  --blue: #0071e3;
+  --red: #d70015;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 12px 32px rgba(0,0,0,.06);
+  font: 17px/1.47 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+}
+@media (prefers-reduced-transparency: reduce) { :root { --card: #fff; } }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+main { max-width: 40rem; margin: 0 auto; padding: 2.75rem 1.25rem 4rem; }
+h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.022em; line-height: 1.1; margin: 0 0 .35rem; }
+h2 { font-size: .75rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 .7rem; }
+p, li { margin: .4rem 0; }
+.lead { color: var(--muted); font-size: .95rem; margin-bottom: 1.25rem; }
+section { background: var(--card); border-radius: 18px; box-shadow: var(--shadow); padding: 1.05rem 1.15rem 1.15rem; margin: 0 0 1.15rem; }
+label { display: block; font-size: .82rem; font-weight: 600; margin: .85rem 0 .3rem; }
 input, button { font: inherit; }
-input { width: 100%; max-width: 28rem; }
-.row { display: inline; }
-.warn { font-weight: 650; }
-code { font-size: .92em; word-break: break-all; }
-</style></head><body>
+input { width: 100%; box-sizing: border-box; padding: .7rem .8rem; border-radius: 12px; border: 1px solid var(--line); background: #fff; color: var(--fg); }
+input:focus { outline: 2px solid #b3d7ff; border-color: var(--blue); }
+button { border: 0; border-radius: 980px; padding: .55rem 1.05rem; background: var(--blue); color: #fff; font-weight: 600; }
+button:active { transform: scale(.97); }
+button.quiet { background: #e8e8ed; color: var(--fg); }
+button.danger { background: transparent; color: var(--red); }
+.warn { color: var(--red); font-weight: 600; }
+.ok { color: #1d7a3a; font-weight: 600; }
+code { font-size: .92em; overflow-wrap: anywhere; }
+form.row { display: inline; }
+form.row button { padding: .3rem .7rem; margin-left: .3rem; }
+@media (prefers-reduced-motion: reduce) { button:active { transform: none; } }
+</style></head><body><main>
 {{if .Login}}
 <h1>bw2fabroker admin</h1>
 <p>This page is only on this machine. Agents do not use it.</p>
@@ -48,7 +71,14 @@ code { font-size: .92em; word-break: break-all; }
 <p>Loopback admin only. An agent calls the HTTP API with its own bearer token. It cannot open this page, and this token is not an agent token.</p>
 <p>Phone page: <strong>{{.Mode}}</strong> {{.Host}}:{{.Port}}{{if .Public}} (links use {{.Public}}){{end}}</p>
 {{if .LAN}}<p class="warn">LAN mode. A device on this network can open the approval page. The page still asks for the approval password.</p>{{end}}
-<p>Vault: {{if .Unlocked}}unlocked{{else}}locked{{end}}</p>
+<p>Vault: {{if .Unlocked}}<span class="ok">unlocked</span>{{else}}<span class="warn">locked</span>{{end}}</p>
+<section><h2>Bitwarden server</h2>
+<p>Bitwarden cloud, Vaultwarden, or Bitwarden's own self-hosted server. HTTPS, or HTTP only on localhost, a private address, or a tailnet address. Saving this runs <code>bw config server</code>. Startup does it again.</p>
+<form method="post" action="/admin/vault">
+<label for="vault_server">Server URL</label>
+<input id="vault_server" name="server" value="{{.VaultServer}}" placeholder="https://vault.example.com" autocomplete="off">
+<p><button type="submit">Save server</button></p>
+</form></section>
 {{if .Notice}}<p>{{.Notice}}</p>{{end}}
 {{if .Secret}}<p>Shown once. It is not stored in the page after you leave. <code>{{.Secret}}</code></p>{{end}}
 <section><h2>Approval password</h2>
@@ -89,8 +119,8 @@ code { font-size: .92em; word-break: break-all; }
 <section><h2>Agents</h2>
 <p>Adding an agent shows its bearer token once. Resume clears a suspension after three denials. Remove deletes the token.</p>
 <ul>{{range .Agents}}<li>{{.}}
-<form class="row" method="post" action="/admin/agent/resume"><input type="hidden" name="name" value="{{.}}"><button type="submit">Resume</button></form>
-<form class="row" method="post" action="/admin/agent/remove"><input type="hidden" name="name" value="{{.}}"><button type="submit">Remove</button></form>
+<form class="row" method="post" action="/admin/agent/resume"><input type="hidden" name="name" value="{{.}}"><button class="quiet" type="submit">Resume</button></form>
+<form class="row" method="post" action="/admin/agent/remove"><input type="hidden" name="name" value="{{.}}"><button class="danger" type="submit">Remove</button></form>
 </li>{{end}}</ul>
 <form method="post" action="/admin/agent/add">
 <label for="agent_name">Name</label>
@@ -100,7 +130,7 @@ code { font-size: .92em; word-break: break-all; }
 <section><h2>Auto rules</h2>
 <p>These items are returned without asking. A TOTP field is never automatic.</p>
 <ul>{{range .Rules}}<li><code>{{.ItemID}}</code> {{if .Field}}{{.Field}}{{else}}any field except totp{{end}}
-<form class="row" method="post" action="/admin/auto/remove"><input type="hidden" name="item" value="{{.ItemID}}"><input type="hidden" name="field" value="{{.Field}}"><button type="submit">Remove</button></form>
+<form class="row" method="post" action="/admin/auto/remove"><input type="hidden" name="item" value="{{.ItemID}}"><input type="hidden" name="field" value="{{.Field}}"><button class="quiet" type="submit">Remove</button></form>
 </li>{{end}}</ul>
 <form method="post" action="/admin/auto/add">
 <label for="auto_item">Item id</label>
@@ -134,17 +164,18 @@ code { font-size: .92em; word-break: break-all; }
 <form method="post" action="/admin/token"><button type="submit">Replace admin token</button></form>
 </section>
 {{end}}
+</main>
 </body></html>`))
 
 type adminView struct {
-	Login                                                                                bool
-	Mode, Host, Public, NtfyURL, Domain, Topic, Notice, Secret, Query, AgentListen, Bind string
-	Port                                                                                 int
-	LAN, Unlocked                                                                        bool
-	Agents                                                                               []string
-	Rules                                                                                []config.AutoRule
-	TwoFA                                                                                []string
-	Items                                                                                []adminItem
+	Login                                                                                             bool
+	Mode, Host, Public, NtfyURL, Domain, Topic, Notice, Secret, Query, AgentListen, Bind, VaultServer string
+	Port                                                                                              int
+	LAN, Unlocked                                                                                     bool
+	Agents                                                                                            []string
+	Rules                                                                                             []config.AutoRule
+	TwoFA                                                                                             []string
+	Items                                                                                             []adminItem
 }
 
 type adminItem struct {
@@ -189,6 +220,8 @@ func (s *Server) AdminHandler() http.Handler {
 			s.admin2FAEnroll(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/admin/password":
 			s.adminPassword(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/admin/vault":
+			s.adminVault(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/admin/token":
 			s.adminRotateToken(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/admin/agent/resume":
@@ -252,7 +285,7 @@ func (s *Server) adminHome(w http.ResponseWriter, r *http.Request, notice string
 	v := adminView{
 		Mode: s.BindMode(), Host: cfg.Approver.BindHost, Public: cfg.Approver.PublicHost,
 		Port: cfg.Approver.Port, NtfyURL: cfg.Ntfy.URL, Domain: cfg.Ntfy.OwnDomain, Topic: cfg.Ntfy.Topic,
-		LAN: s.allowLAN.Load(), Unlocked: s.Vault.Unlocked(), Agents: cfg.AgentNames(), Rules: cfg.Auto, TwoFA: cfg.TwoFA.Items, AgentListen: cfg.Agent.Listen,
+		LAN: s.allowLAN.Load(), Unlocked: s.Vault.Unlocked(), Agents: cfg.AgentNames(), Rules: cfg.Auto, TwoFA: cfg.TwoFA.Items, AgentListen: cfg.Agent.Listen, VaultServer: cfg.Vault.Server,
 		Notice: notice, Query: r.URL.Query().Get("q"),
 	}
 	if cfg.Approver.BindIP != "" {
@@ -515,6 +548,31 @@ func (s *Server) adminResume(w http.ResponseWriter, r *http.Request) {
 	s.Resume(name)
 	s.adminHome(w, r, "Agent resumed.")
 }
+func (s *Server) adminVault(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	raw := strings.TrimSpace(r.PostForm.Get("server"))
+	if err := config.ValidVaultServer(raw); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if raw != "" {
+		if v, ok := s.Vault.(interface {
+			SetServer(ctx context.Context, rawURL string) error
+		}); ok {
+			if err := v.SetServer(r.Context(), raw); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+	s.adminMutate(w, r, "Bitwarden server saved.", func(c *config.Config) error {
+		c.Vault.Server = raw
+		return c.Validate()
+	})
+}
 
 func (s *Server) fill(r *http.Request, v *adminView) {
 	cfg := s.Config()
@@ -534,6 +592,7 @@ func (s *Server) fill(r *http.Request, v *adminView) {
 	v.Rules = cfg.Auto
 	v.TwoFA = cfg.TwoFA.Items
 	v.AgentListen = cfg.Agent.Listen
+	v.VaultServer = cfg.Vault.Server
 	_ = r
 }
 

@@ -20,6 +20,7 @@ case "$1 $2" in
   [ "$BW2FA_MASTER" = "master-pw" ] || { echo "Invalid master password." >&2; exit 1; }
   printf 'sess-123'; exit 0;;
 esac
+	[ "$1 $2" = "config server" ] && { printf '%s\n' "$3"; exit 0; }
 [ "$1" = "status" ] && { echo '{"status":"locked"}'; exit 0; }
 [ "$BW_SESSION" = "sess-123" ] || { echo "Vault is locked." >&2; exit 1; }
 case "$1 $2" in
@@ -120,6 +121,18 @@ func TestEnvHasNoSessionWhenLocked(t *testing.T) {
 	for _, kv := range b.env() {
 		if strings.HasPrefix(kv, "BW_SESSION=") {
 			t.Fatal("session in env")
+		}
+	}
+}
+func TestSetServer(t *testing.T) {
+	b := newFake(t)
+	ctx := context.Background()
+	if err := b.SetServer(ctx, "http://vault.example.com"); err == nil {
+		t.Fatal("public http accepted")
+	}
+	for _, u := range []string{"https://vault.example.com", "http://127.0.0.1:8080", "http://100.64.0.8"} {
+		if err := b.SetServer(ctx, u); err != nil {
+			t.Fatal(u, err)
 		}
 	}
 }

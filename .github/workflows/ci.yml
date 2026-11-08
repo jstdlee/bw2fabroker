@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t bw2fabroker:ci .
-      - run: docker run --rm --entrypoint sh bw2fabroker:ci -c 'broker version && bw --version'
+      - run: docker run --rm --entrypoint sh bw2fabroker:ci -c 'broker version && bw --version && command -v broker-mcp'
   e2e:
     runs-on: ubuntu-24.04
     steps:

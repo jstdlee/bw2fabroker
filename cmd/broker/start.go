@@ -117,6 +117,14 @@ func cmdStart(args []string) error {
 		return err
 	}
 	bw := vault.NewBW(cfg.Vault.BWPath, cfg.Vault.AppData)
+	if cfg.Vault.Server != "" {
+		sctx, scancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := bw.SetServer(sctx, cfg.Vault.Server)
+		scancel()
+		if err != nil {
+			return fmt.Errorf("bitwarden server: %w", err)
+		}
+	}
 	srv := api.New(holder.Get, bw, n, linker, log)
 	if alog, err := audit.Open(filepath.Join(filepath.Dir(cfgPath), "audit.jsonl")); err != nil {
 		return fmt.Errorf("audit log: %w", err)

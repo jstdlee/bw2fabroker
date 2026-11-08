@@ -20,24 +20,29 @@ var page = template.Must(template.New("page").Parse(`<!doctype html>
 <meta name="referrer" content="no-referrer">
 <title>bw2fabroker</title>
 <style>
-:root{color-scheme:light dark;--bg:#fff;--fg:#111;--muted:#666;--line:#ddd;--ok:#0a7d32;--no:#b3261e}
-@media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#eee;--muted:#999;--line:#333;--ok:#4cc76f;--no:#ff7b72}}
-body{background:var(--bg);color:var(--fg);font:16px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:16px;max-width:520px}
-h1{font-size:20px;margin:0 0 12px}
-dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0 0 16px}
-dt{color:var(--muted)}dd{margin:0;overflow-wrap:anywhere}
-.reason{border-left:3px solid var(--line);padding-left:8px}
-.small{color:var(--muted);font-size:14px}
-input[type=password]{width:100%;box-sizing:border-box;font-size:18px;padding:10px;margin:6px 0 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
-button{font-size:18px;padding:12px;border-radius:8px;border:0;width:100%;margin-bottom:10px;color:#fff}
-.approve{background:var(--ok)}.deny{background:var(--no)}
-.status{font-size:18px;font-weight:600}
-.demo{border:1px solid var(--line);border-radius:8px;padding:8px;margin:0 0 12px}
-</style></head><body>
+:root{color-scheme:light;--bg:#f5f5f7;--card:#fff;--fg:#1d1d1f;--muted:#6e6e73;--line:rgba(0,0,0,.08);--blue:#0071e3;--red:#d70015}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.47 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
+main{max-width:28rem;margin:0 auto;padding:1.5rem 1rem 3rem}
+h1{font-size:1.7rem;font-weight:700;letter-spacing:-.022em;line-height:1.15;margin:0 0 1rem}
+.card{background:var(--card);border-radius:18px;box-shadow:0 1px 2px rgba(0,0,0,.04),0 12px 32px rgba(0,0,0,.06);padding:1rem 1rem .4rem;margin:0 0 1rem}
+dl{display:grid;grid-template-columns:5.5rem 1fr;gap:.55rem .75rem;margin:0}
+dt{color:var(--muted);font-size:.82rem;padding-top:.15rem}dd{margin:0;overflow-wrap:anywhere}
+.reason{background:#f5f5f7;border-radius:12px;padding:.55rem .7rem}
+.small{color:var(--muted);font-size:.82rem}
+label{display:block;font-size:.82rem;font-weight:600;margin:.2rem 0 .3rem}
+input{width:100%;box-sizing:border-box;font:inherit;font-size:1.05rem;padding:.75rem .8rem;margin:0 0 .8rem;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--fg)}
+input:focus{outline:2px solid #b3d7ff;border-color:var(--blue)}
+button{font:inherit;font-weight:600;font-size:1.05rem;padding:.85rem;border-radius:980px;border:0;width:100%;margin-bottom:.6rem}
+button:active{transform:scale(.97)}
+.approve{background:var(--blue);color:#fff}.deny{background:#e8e8ed;color:var(--red)}
+.status{font-size:1.15rem;font-weight:650;letter-spacing:-.01em}
+.demo{background:#fff8e8;border-radius:12px;padding:.7rem .8rem;margin:0 0 .9rem}
+@media (prefers-reduced-motion:reduce){button:active{transform:none}}
+</style></head><body><main>
 {{if .Pending}}
 <h1>Approve one secret?</h1>
 {{if .Demo}}<p class="demo">Demo on this machine. Not your Bitwarden vault. Use the approval password printed when <code>broker demo</code> started.</p>{{end}}
-<dl>
+<div class="card"><dl>
 <dt>Agent</dt><dd>{{.Agent}}</dd>
 <dt>Item</dt><dd>{{.ItemName}}</dd>
 <dt>Item id</dt><dd><code>{{.ItemID}}</code></dd>
@@ -45,7 +50,7 @@ button{font-size:18px;padding:12px;border-radius:8px;border:0;width:100%;margin-
 <dt>Field</dt><dd><strong>{{.Field}}</strong>{{if .IsTOTP}} — a second factor{{end}}</dd>
 <dt>Reason</dt><dd class="reason">{{.Reason}}<br><span class="small">the agent's own words</span></dd>
 <dt>Expires</dt><dd>in {{.SecondsLeft}} s</dd>
-</dl>
+</dl></div>
 {{if .Message}}<p class="status">{{.Message}}</p>{{end}}
 <form method="post" action="{{.Base}}/approve" autocomplete="off">
 <label for="pw">Approval password</label>
@@ -60,7 +65,7 @@ button{font-size:18px;padding:12px;border-radius:8px;border:0;width:100%;margin-
 <h1>bw2fabroker</h1>
 <p class="status">{{.Message}}</p>
 {{end}}
-</body></html>`))
+</main></body></html>`))
 
 type pageData struct {
 	Pending                                bool

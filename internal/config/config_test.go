@@ -32,6 +32,20 @@ func TestSaveLoadMode(t *testing.T) {
 		t.Fatal("world-readable config accepted")
 	}
 }
+func TestValidVaultServer(t *testing.T) {
+	ok := []string{"", "https://vault.example.com", "https://vault.bitwarden.com", "http://127.0.0.1:8080", "http://localhost:8080", "http://192.168.1.9", "http://100.64.0.8"}
+	bad := []string{"http://vault.example.com", "https://user:pw@vault.example.com", "ftp://vault.example.com", "https://vault.example.com/?x=1"}
+	for _, s := range ok {
+		if err := ValidVaultServer(s); err != nil {
+			t.Errorf("%q: %v", s, err)
+		}
+	}
+	for _, s := range bad {
+		if err := ValidVaultServer(s); err == nil {
+			t.Errorf("%q accepted", s)
+		}
+	}
+}
 
 func TestValidateAndAuto(t *testing.T) {
 	c := &Config{HMACKey: strings.Repeat("ab", 32), ApprovalPassword: "$argon2id$x"}
