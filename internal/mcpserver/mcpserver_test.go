@@ -533,3 +533,58 @@ func TestServeStdio(t *testing.T) {
 		t.Fatalf("unknown method: %s", lines[2])
 	}
 }
+
+// TestRequestFieldArgsKeyCompat: some clients send "args" instead of the standard
+// "arguments" key (seen in production). It must still reach the tool.
+func TestRequestFieldArgsKeyCompat(t *testing.T) {
+	f := newFake()
+	s := New(f, "dev")
+	raw, err := json.Marshal(map[string]any{"name": "request_field", "args": map[string]any{
+		"item": "staging-db", "field": "password", "reason": "migrate",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": json.RawMessage(raw)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := result(t, s, string(body))
+	if tr["isError"] != false {
+		t.Fatalf("isError: %v", tr["isError"])
+	}
+	if len(f.fetched) != 1 || f.fetched[0] != "staging-db/password/migrate" {
+		t.Fatalf("fetched: %v", f.fetched)
+	}
+}
+
+// TestRequestFieldArgValidation: argument problems must return a precise message,
+// not the opaque "invalid arguments".
+func TestRequestFieldArgValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"missing item", map[string]any{"field": "password", "reason": "migrate"}, "item and field are required"},
+		{"missing reason", map[string]any{"item": "staging-db", "field": "password"}, "reason is required"},
+		{"long reason", map[string]any{"item": "staging-db", "field": "password", "reason": strings.Repeat("x", 121)}, "reason too long"},
+		{"url reason", map[string]any{"item": "staging-db", "field": "password", "reason": "see https://example.com"}, "must not contain a URL"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFake()
+			s := New(f, "dev")
+			tr := toolResult(t, s, "request_field", c.args)
+			if tr["isError"] != true {
+				t.Fatalf("isError: %v", tr["isError"])
+			}
+			if !strings.Contains(toolBlockText(t, tr), c.want) {
+				t.Fatalf("text %q: want %q", toolBlockText(t, tr), c.want)
+			}
+			if len(f.fetched) != 0 {
+				t.Fatalf("fetch must not run: %v", f.fetched)
+			}
+		})
+	}
+}

@@ -68,9 +68,14 @@ func callTool(ctx context.Context, c Client, params json.RawMessage) map[string]
 	var p struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
+		// Args accepts the non-standard "args" key some clients send; arguments is the MCP norm.
+		Args json.RawMessage `json:"args"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
-		return toolError("invalid arguments")
+		return toolError("invalid arguments: " + err.Error())
+	}
+	if len(p.Arguments) == 0 {
+		p.Arguments = p.Args
 	}
 	switch p.Name {
 	case toolListItems:
@@ -96,7 +101,19 @@ func callTool(ctx context.Context, c Client, params json.RawMessage) map[string]
 			Item, Field, Reason string
 		}
 		if err := json.Unmarshal(p.Arguments, &a); err != nil {
-			return toolError("invalid arguments")
+			return toolError("invalid arguments: " + err.Error())
+		}
+		if a.Item == "" || a.Field == "" {
+			return toolError("item and field are required")
+		}
+		if a.Reason == "" {
+			return toolError("reason is required")
+		}
+		if len(a.Reason) > 120 {
+			return toolError("reason too long: max 120 characters")
+		}
+		if strings.Contains(a.Reason, "://") {
+			return toolError("reason must not contain a URL")
 		}
 		resp, err := c.Fetch(ctx, a.Item, a.Field, a.Reason)
 		if err != nil {
