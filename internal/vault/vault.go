@@ -80,8 +80,8 @@ func (b *BW) Unlocked() bool {
 	return b.session != ""
 }
 
-func (b *BW) env(extra ...string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "BW_NOINTERACTION=true", "NODE_NO_WARNINGS=1"}
+func (b *BW) baseEnv(extra ...string) []string {
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "NODE_NO_WARNINGS=1"}
 	if b.AppData != "" {
 		env = append(env, "BITWARDENCLI_APPDATA_DIR="+b.AppData)
 	}
@@ -91,6 +91,37 @@ func (b *BW) env(extra ...string) []string {
 		}
 	}
 	return append(env, extra...)
+}
+
+func (b *BW) env(extra ...string) []string {
+	return append(b.baseEnv(), append([]string{"BW_NOINTERACTION=true"}, extra...)...)
+}
+
+// Login runs `bw login` against the broker's profile, attached to the caller's terminal, because
+// bw asks for the master password and any two-step code itself. With an API key the client id and
+// secret go in the child's environment, so neither appears in argv. The login state goes to the
+// profile directory; the broker never reads a session from its own environment.
+func (b *BW) Login(ctx context.Context, apikey bool, clientID, clientSecret, email string) error {
+	args := []string{"login"}
+	var env []string
+	switch {
+	case apikey && clientID != "" && clientSecret != "":
+		args = append(args, "--apikey")
+		env = append(env, "BW_CLIENTID="+clientID, "BW_CLIENTSECRET="+clientSecret)
+	case apikey:
+		args = append(args, "--apikey")
+	case email != "":
+		args = append(args, email)
+	}
+	cmd := exec.CommandContext(ctx, b.Path, args...)
+	cmd.Env = b.baseEnv(env...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("bw login: %w", err)
+	}
+	return nil
 }
 
 func (b *BW) run(ctx context.Context, withSession bool, extraEnv []string, args ...string) ([]byte, error) {
@@ -143,11 +174,27 @@ func (b *BW) Status(ctx context.Context) (string, error) {
 	return s.Status, nil
 }
 
+// Account returns the email of the logged-in user, or "" when bw reports none. Doctor prints it
+// because the whole isolation rests on this being the agents account, not a personal one.
+func (b *BW) Account(ctx context.Context) (string, error) {
+	out, err := b.run(ctx, b.Unlocked(), nil, "status")
+	if err != nil {
+		return "", err
+	}
+	var s struct {
+		UserEmail string `json:"userEmail"`
+	}
+	if err := json.Unmarshal(out, &s); err != nil {
+		return "", err
+	}
+	return s.UserEmail, nil
+}
+
 // Unlock runs `bw unlock --raw` with the password in the child's environment only.
 func (b *BW) Unlock(ctx context.Context, master string) error {
 	out, err := b.run(ctx, false, []string{"BW2FA_MASTER=" + master}, "unlock", "--raw", "--passwordenv", "BW2FA_MASTER")
 	if err != nil {
-		return errors.New("bw unlock failed: wrong master password, or `bw login --apikey` was not run as this user")
+		return errors.New("bw unlock failed: wrong master password, or `broker login` was not run for this profile")
 	}
 	s := strings.TrimSpace(string(out))
 	if s == "" {

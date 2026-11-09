@@ -87,9 +87,13 @@ func cmdDoctor() error {
 	if s, err := bw.Status(ctx); err != nil {
 		bad("bw: " + err.Error())
 	} else if s == "unauthenticated" {
-		bad("bw is not logged in; run `bw config server <url>` and `bw login --apikey` as this user, with the agents account")
+		bad("bw is not logged in; run `broker login` as this user with the agents account (Docker: docker exec -it <container> broker login)")
 	} else {
-		ok("bw is logged in (" + s + ")")
+		line := "bw is logged in (" + s + ")"
+		if email, err := bw.Account(ctx); err == nil && email != "" {
+			line = "bw is logged in as " + email + " (" + s + ")"
+		}
+		ok(line)
 	}
 	if err := vault.CheckBinary(cfg.Vault.BWPath); err != nil {
 		bad(err.Error())

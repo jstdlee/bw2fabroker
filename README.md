@@ -93,7 +93,7 @@ npm install -g @bitwarden/cli   # bw must be on PATH for the broker user
 sudo -u broker -H env BROKER_CONFIG=/etc/bw2fabroker/config.toml HOME=/var/lib/bw2fabroker sh -c '
   broker init --ntfy-domain ntfy.example.com            # prints the admin token once
   BITWARDENCLI_APPDATA_DIR=/var/lib/bw2fabroker/bw bw config server https://vault.example.com
-  BITWARDENCLI_APPDATA_DIR=/var/lib/bw2fabroker/bw bw login --apikey   # agents account API key
+  broker login --apikey                                 # agents account API key
 '
 # Open http://127.0.0.1:8788/admin with that token.
 sudo systemctl enable --now bw2fabroker
@@ -212,6 +212,7 @@ curl -s -X POST "$BROKER_URL/mcp" \
 | Command | Does |
 |---|---|
 | `broker init` | Config, HMAC key, approval password (argon2id), loopback admin panel, admin token (printed once) |
+| `broker login` | Log the vault in as the agents account, in the broker's own profile, against its own server setting |
 | `broker start` / `broker unlock` | Serve, or unlock `bw`. `BW_MASTER_PASSWORD` unlocks at start |
 | `broker unlock-approvals` | Clear the lockout after 10 wrong passwords in an hour |
 | `broker status`, `broker doctor` | State of the running broker, setup checks |
@@ -237,7 +238,7 @@ The broker does not ship a vault. It points `bw` at a server:
 
 Set the URL in the admin panel (Bitwarden server) or with `BW_SERVER`. Saving it runs `bw config server`. Startup runs it again from `vault.server`. HTTPS is the normal case. Plain HTTP is accepted only for localhost, a loopback address, a private address, or a tailnet address. For a private CA, set `NODE_EXTRA_CA_CERTS` for the broker user; that variable is passed through to `bw`.
 
-Log in once as the agents account: `bw login --apikey`. Unlock later with that account's master password (`broker unlock` or `BW_MASTER_PASSWORD`). That master password is not the approval password.
+Log in once as the agents account: `broker login` (Docker: `docker exec -it <container> broker login`; `--email you@example.com` uses the email form, otherwise the API key from `BW_CLIENTID`/`BW_CLIENTSECRET` or a prompt). The login state lives in the broker's own profile, so a session from another machine cannot stand in for it. Unlock later with that account's master password (`broker unlock` or `BW_MASTER_PASSWORD`). That master password is not the approval password.
 
 ## Security model
 
@@ -277,9 +278,10 @@ What this does not protect against: you approving a request you did not read; an
 - You want a password-manager UI, or the agent must create or edit vault items. The agent API is read-only, one field at a time.
 - The value is binary, longer than 4 KB, or not UTF-8 text. Those are refused (`value_too_large`).
 - You want the public ntfy service, or the approval page on the public internet. Both are refused.
-- The Bitwarden account cannot use `bw login --apikey`. The broker does not do interactive SSO.
+- The Bitwarden account logs in with `broker login` (an API key, or email + master password + two-step code). The broker does not do SSO sign-in.
 - High-frequency secrets (a session cookie that changes every minute, a one-time code you did not mean to hand to an agent). TOTP is allowed only as an explicit ask, and it is never automatic.
 - Replacing Bitwarden's own access control for humans. Humans keep using Bitwarden. This is the gate in front of agents.
+
 
 ## Limits
 

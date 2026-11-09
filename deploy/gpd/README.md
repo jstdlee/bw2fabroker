@@ -41,12 +41,15 @@ cd /home/fxyz/apps/bw2fabroker/deploy/gpd
 docker exec bw2fabroker bw config server https://vault.bitwarden.com
 
 # 2. log in as the agents account (create that account and its one collection first)
-docker exec -e BW_CLIENTID='user.xxxx' -e BW_CLIENTSECRET='yyyy' bw2fabroker bw login --apikey
+#    the login lives in the container's /data/bw; a session from another machine cannot be used
+docker exec -e BW_CLIENTID='user.xxxx' -e BW_CLIENTSECRET='yyyy' bw2fabroker broker login --apikey
+#    or: BW_CLIENTID=... BW_CLIENTSECRET=... deploy/gpd/login.sh
 
 # 3. unlock (master password of the agents account, not the approval password)
 docker exec -it bw2fabroker broker unlock
 
-# 4. check
+# 4. check — doctor prints the account it is logged in as; it must be the agents account,
+#    never a personal one, because the account is what limits which items exist at all
 docker exec bw2fabroker broker doctor
 ```
 

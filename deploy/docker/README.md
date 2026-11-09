@@ -24,7 +24,7 @@ docker compose run --rm -it broker init --ntfy-domain ntfy.example.com
 # and set ntfy, the agent listen address, and an agent.
 docker compose run --rm -it --entrypoint bw broker config server https://vault.example.com
 #   (Bitwarden cloud: https://vault.bitwarden.com or https://vault.bitwarden.eu)
-docker compose run --rm -it -e BW_CLIENTID=user.xxx -e BW_CLIENTSECRET=yyy --entrypoint bw broker login --apikey
+docker compose run --rm -it -e BW_CLIENTID=user.xxx -e BW_CLIENTSECRET=yyy broker login --apikey
 
 docker compose up -d broker
 docker compose exec -it broker broker unlock                 # master password of the agents account
