@@ -356,7 +356,7 @@ func (s *Server) create(ctx context.Context, agent string, r *http.Request) cont
 		return contract.Approved(id, value, contract.CodeAuto)
 	}
 
-	if s.ApprovalsLocked() || !s.ApproverUp() || s.Notifier == nil {
+	if s.ApprovalsLocked() || !s.ApproverUp() {
 		s.audit("rejected", agent, append(base, slog.String("code", "locked"))...)
 		return contract.Rejected(id, contract.CodeLocked)
 	}
@@ -368,6 +368,15 @@ func (s *Server) create(ctx context.Context, agent string, r *http.Request) cont
 	}
 	linkBase, _ := s.linkBase.Load().(string)
 	link := linkBase + "/a/" + s.Linker.Sign(id, pr.Expires)
+	if s.Notifier == nil {
+		// No push channel is configured. The link is the only way to the approval page, so it
+		// goes to the log and to the admin panel. The request and its rules are unchanged.
+		s.Log.Info("approval needed; no notification channel is configured",
+			slog.String("request_id", id), slog.String("agent", agent), slog.String("item", item.Name),
+			slog.String("field", field.String()), slog.String("reason", req.Reason), slog.String("link", link))
+		s.audit("notified", agent, append(base, slog.String("channel", "log"))...)
+		return contract.Pending(id)
+	}
 	nctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	err = s.Notifier.Send(nctx, notify.Message{
