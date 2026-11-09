@@ -504,25 +504,25 @@ func (s *Server) adminNtfyTest(w http.ResponseWriter, r *http.Request) {
 	cfg := s.Config()
 	n, err := notify.FromConfig(cfg.Ntfy.URL, cfg.Ntfy.OwnDomain, cfg.Ntfy.Topic, cfg.Ntfy.Token)
 	if err != nil {
-		s.adminHome(w, r, "Notification check failed: "+err.Error())
+		s.adminHome(w, r, "Notification check failed: "+err.Error(), "bad")
 		return
 	}
 	if n == nil {
-		s.adminHome(w, r, "No ntfy is configured, so there is nothing to test.")
+		s.adminHome(w, r, "No ntfy is configured, so there is nothing to test.", "warn")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	if err := n.RequireAuth(ctx); err != nil {
-		s.adminHome(w, r, "Notification check failed: "+err.Error())
+		s.adminHome(w, r, "Notification check failed: "+err.Error(), "bad")
 		return
 	}
 	if err := n.Send(ctx, notify.Message{Title: "bw2fabroker test", Body: "The broker reached this topic with its bearer token. No action needed.", Priority: 3, Tags: []string{"bell"}}); err != nil {
-		s.adminHome(w, r, "Test push failed: "+err.Error())
+		s.adminHome(w, r, "Test push failed: "+err.Error(), "bad")
 		return
 	}
 	s.audit("ntfy_test", "admin")
-	s.adminHome(w, r, "Test notification sent: anonymous publish and read are refused, the bearer token was accepted, and one push was delivered.")
+	s.adminHome(w, r, "Test notification sent: anonymous publish and read are refused, the bearer token was accepted, and one push was delivered.", "ok")
 }
 
 func (s *Server) adminAgentAdd(w http.ResponseWriter, r *http.Request) {

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/term"
 
@@ -161,7 +160,7 @@ func cmdInit(args []string) error {
 	if err := config.Save(p, c); err != nil {
 		return err
 	}
-"fmt.Printf("Wrote %s (mode 0600).\nAdmin panel: http://127.0.0.1:8788/admin\nAdmin token (shown once):\n%s\n", p, token)
+	fmt.Printf("Wrote %s (mode 0600).\nAdmin panel: http://127.0.0.1:8788/admin\nAdmin token (shown once):\n%s\n", p, token)
 	if *domain == "" {
 		fmt.Println("No ntfy domain given: the broker runs without notifications, and approval links go to the log and the admin panel. Set ntfy in that panel when you have a server.")
 	} else {

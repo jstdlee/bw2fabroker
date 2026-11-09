@@ -149,7 +149,7 @@ func cmdStart(args []string) error {
 			return fmt.Errorf("bitwarden server: %w", err)
 		}
 	}
-srv := api.New(holder.Get, bw, notifier, linker, log)
+	srv := api.New(holder.Get, bw, notifier, linker, log)
 	srv.Version = version
 	srv.Tailscale = ts
 	if alog, err := audit.Open(filepath.Join(filepath.Dir(cfgPath), "audit.jsonl")); err != nil {

@@ -94,6 +94,7 @@ form.inline { display: inline; }
 .notice { border-radius: 8px; padding: 9px 12px; margin: 0 0 14px; font-size: 12.5px; border: 1px solid var(--line); background: var(--card); }
 .notice.ok { border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); color: var(--ok); }
 .notice.bad { border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); color: var(--bad); }
+.notice.warn { border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); color: var(--warn); }
 .secret { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--track); border-radius: 6px; padding: 8px 10px; overflow-wrap: anywhere; }
 .foot { color: var(--dim); font-size: 11.5px; margin-top: 26px; }
 table { border-collapse: collapse; width: 100%; font-size: 12px; margin: 6px 0 0; }
