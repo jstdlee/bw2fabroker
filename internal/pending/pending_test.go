@@ -95,3 +95,43 @@ func TestForceClean(t *testing.T) {
 		}
 	}
 }
+
+// A waiter whose hold ends at or after the expiry must learn that the request is dead. Before this
+// was fixed, Store.Wait answered pending, so an agent polling the request kept waiting for an
+// approval whose link had already stopped working.
+func TestWaitExpiresWhenTheHoldOutlivesTheRequest(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	s := New(func() time.Time { return now }, nil)
+	r := &Request{ID: "r_expireme001", Agent: "x", Expires: now.Add(time.Minute)}
+	if err := s.Add(r); err != nil {
+		t.Fatal(err)
+	}
+	// The expiry timer is what normally finalizes the request; drop it so the hold is the only
+	// clock in play, as it was on the deployed broker.
+	r.timer.Stop()
+	now = now.Add(2 * time.Minute)
+
+	resp := s.Wait(context.Background(), r.ID, "x", time.Millisecond)
+	if resp.Status != contract.StatusDenied || resp.Code == nil || *resp.Code != contract.CodeExpired {
+		t.Fatalf("want denied/expired, got %+v", resp)
+	}
+	// A second waiter sees the same final result and does not resurrect the request.
+	if again := s.Wait(context.Background(), r.ID, "x", time.Millisecond); again.Status != contract.StatusDenied {
+		t.Fatalf("second wait: %+v", again)
+	}
+}
+
+// A hold that ends while the request is still approvable keeps answering pending: the caller asked
+// for a shorter wait, not for a decision.
+func TestWaitStaysPendingBeforeExpiry(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	s := New(func() time.Time { return now }, nil)
+	r := &Request{ID: "r_pending0001", Agent: "x", Expires: now.Add(time.Minute)}
+	if err := s.Add(r); err != nil {
+		t.Fatal(err)
+	}
+	r.timer.Stop()
+	if resp := s.Wait(context.Background(), r.ID, "x", time.Millisecond); resp.Status != contract.StatusPending {
+		t.Fatalf("want pending, got %+v", resp)
+	}
+}
