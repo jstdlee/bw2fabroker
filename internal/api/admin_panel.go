@@ -517,7 +517,7 @@ func (s *Server) adminNtfyTest(w http.ResponseWriter, r *http.Request) {
 		s.adminHome(w, r, "Notification check failed: "+err.Error(), "bad")
 		return
 	}
-	if err := n.Send(ctx, notify.Message{Title: "bw2fabroker test", Body: "The broker reached this topic with its bearer token. No action needed.", Priority: 3, Tags: []string{"bell"}}); err != nil {
+	if err := n.Send(ctx, notify.Message{Title: "bw2fabroker test", Body: "This push is the delivery half of the ntfy test; the access checks just now were silent.", Priority: 3, Tags: []string{"bell"}}); err != nil {
 		s.adminHome(w, r, "Test push failed: "+err.Error(), "bad")
 		return
 	}

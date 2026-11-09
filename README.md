@@ -286,6 +286,7 @@ What this does not protect against: you approving a request you did not read; an
 ## Limits
 
 - One approval, one secret, delivered once. Requests expire after 120 seconds, a restart cancels them all, and every 4 hours the broker force cleans the request store as a backstop: anything still in it is denied as expired and erased.
+- Every 4 hours the broker re-checks ntfy and the vault. A check that passes stays silent (the ntfy probe asks the server not to deliver it); when a check starts failing, one push goes out, and a check that keeps failing stays quiet. Each result shows on the admin panel's ntfy card.
 - 3 wrong passwords deny the request. 10 in an hour lock all approvals.
 - 3 denials in 10 minutes suspend the agent until the panel resumes it.
 - At most 5 pending requests, and 20 new requests, per agent per 10 minutes.

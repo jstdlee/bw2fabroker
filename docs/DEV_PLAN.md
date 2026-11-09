@@ -162,7 +162,11 @@ fixed codes) and turns anything else into `rejected` / `internal_error`:
 - If the check fails, the broker does not send, and the request ends `rejected` / `locked`.
 - `broker start` and `broker doctor` refuse to run with a partly filled ntfy config, and they probe
   it before serving: an anonymous publish and an anonymous read must both be refused, and the
-  configured bearer token must publish. A topic that answers without a token is refused.
+  configured bearer token must publish. A topic that answers without a token is refused. The
+  probes are asked to stay off the phone (Firebase off), so a passing check pushes nothing.
+- Every 4 hours the broker re-runs the probes and `bw status`. A check that passes stays silent;
+  when a check starts failing one attention push goes out, and a check that keeps failing stays
+  quiet. Each result is logged as an audit event and lands on the admin panel's ntfy card.
 - Publisher exclusivity belongs to the ntfy ACL, not to the broker: `deploy/ntfy/provision.sh`
   creates the broker user with **write-only** on the topic, the phone's user with **read-only**
   (ntfy applies the most specific rule, so a wider `*` grant does not re-open the topic), and an

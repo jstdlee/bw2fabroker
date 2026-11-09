@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -102,6 +103,59 @@ func TestFromConfig(t *testing.T) {
 	n, err := FromConfig("https://ntfy.example.com", "ntfy.example.com", "approvals", "tk")
 	if err != nil || n == nil || n.Token != "tk" {
 		t.Fatalf("full config: %v %v", n, err)
+	}
+}
+
+// TestRequireAuthProbeBody checks the authed publish the RequireAuth probe sends with the
+// configured token: it must ask the server to keep the message off Firebase, and must not
+// carry the old "No action needed" wording, so a passing check never rings the phone.
+func TestRequireAuthProbeBody(t *testing.T) {
+	var authedBody json.RawMessage
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		defer r.Body.Close()
+		b, _ := io.ReadAll(r.Body)
+		// The anonymous publish probe arrives first and unauthenticated; the authed publish
+		// carries the bearer token, which is the one this test is about.
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		authedBody = b
+		w.WriteHeader(http.StatusForbidden) // the token is not accepted
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	n, err := New(srv.URL, u.Hostname(), "approvals", "tk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.Client.Transport = srv.Client().Transport
+	err = n.RequireAuth(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "bearer token") {
+		t.Fatalf("unexpected outcome: %v", err)
+	}
+	if authedBody == nil {
+		t.Fatal("the authed probe never reached the server")
+	}
+	var p publish
+	if err := json.Unmarshal(authedBody, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Firebase != "no" {
+		t.Fatalf("authed probe body %s does not keep the message off Firebase", authedBody)
+	}
+	if p.Priority != 1 {
+		t.Fatalf("authed probe priority = %d, want 1", p.Priority)
+	}
+	if p.Title != "bw2fabroker probe" {
+		t.Fatalf("authed probe title = %q", p.Title)
+	}
+	if strings.Contains(p.Message, "No action needed") {
+		t.Fatalf("authed probe still promises nothing is needed: %q", p.Message)
 	}
 }
 
