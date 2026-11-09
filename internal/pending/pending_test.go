@@ -51,47 +51,47 @@ func TestStore(t *testing.T) {
 func TestForceClean(t *testing.T) {
 	now := time.Now()
 	s := New(nil, nil)
-	var woken []string
+	ids := []string{"r_faaaaaaaaaa", "r_fbaaaaaaaaa", "r_fcaaaaaaaaa"}
 	for i, st := range []string{"pending", "approving", "final"} {
-		id := "r_f" + string(rune('a'+i)) + "aaaaaaaa"
-		r := &Request{ID: id, Agent: "x", Expires: now.Add(time.Minute)}
+		r := &Request{ID: ids[i], Agent: "x", Expires: now.Add(time.Minute)}
 		if err := s.Add(r); err != nil {
 			t.Fatal(err)
 		}
 		switch st {
 		case "approving":
-			if _, err := s.Claim(id); err != nil {
+			if _, err := s.Claim(ids[i]); err != nil {
 				t.Fatal(err)
 			}
 		case "final":
-			if _, err := s.Finish(id, contract.Denied(id, contract.CodeExpired)); err != nil {
+			if _, err := s.Finish(ids[i], contract.Denied(ids[i], contract.CodeExpired)); err != nil {
 				t.Fatal(err)
 			}
 		}
-		go func(rid string) {
-			resp := s.Wait(context.Background(), rid, "x", time.Second)
-			if resp.Status != contract.StatusDenied || *resp.Code != contract.CodeExpired {
-				woken = append(woken, "bad")
-			} else {
-				woken = append(woken, rid)
-			}
-		}(id)
 	}
-	time.Sleep(20 * time.Millisecond)
+	// A canceled context drops Wait out at once: the final entry answers at once, the others
+	// report that they are still waiting.
+	cut, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, id := range []string{"r_faaaaaaaaaa", "r_fbaaaaaaaaa"} {
+		if r := s.Wait(cut, id, "x", time.Second); r.Status != contract.StatusPending {
+			t.Fatalf("pre-clean wait on %s: %+v", id, r)
+		}
+	}
+	if r := s.Wait(cut, "r_fcaaaaaaaaa", "x", time.Second); r.Status != contract.StatusDenied || r.Code == nil || *r.Code != contract.CodeExpired {
+		t.Fatalf("pre-clean wait on the final one: %+v", r)
+	}
 	if got := s.ForceClean(); got != 3 {
 		t.Fatalf("force cleaned %d, want 3", got)
 	}
 	if s.Len() != 0 {
 		t.Fatalf("store not empty: %d", s.Len())
 	}
-	// Every waiter was woken with denied/expired, including the final one.
-	for _, w := range woken {
-		if w == "bad" {
-			t.Fatal("a waiter did not get denied/expired")
+	// The clean erased everything: every id, the final one included, is unknown afterwards. That is
+	// the invalidation the broker promises; a waiter that was waiting when the clean ran got the
+	// denied/expired final through the wake.
+	for _, id := range ids {
+		if r := s.Wait(context.Background(), id, "x", time.Second); r.Status != contract.StatusDenied || r.Code == nil || *r.Code != contract.CodeUnknownRequest {
+			t.Fatalf("wait on %s: want unknown_request, got %+v", id, r)
 		}
-	}
-	// Waiters get unknown_request after the clean.
-	if r := s.Wait(context.Background(), "r_faaaaaaaaaa", "x", 10*time.Millisecond); r.Code == nil || *r.Code != contract.CodeUnknownRequest {
-		t.Fatalf("want unknown_request, got %+v", r)
 	}
 }
