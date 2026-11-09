@@ -28,6 +28,34 @@ type ntfyState struct {
 	Title string
 }
 
+// HealthWatch turns a stream of health-check results into at most one push per failure onset.
+// Tick takes one check's failure description ("" when the check passed) and returns a Message
+// only when a passing check just turned failing — including the first check after startup.
+// A check that stays failing pushes nothing (the latest reason is still kept for the log), and
+// recovery is silent. cmd/broker's 4-hourly health loop uses it.
+type HealthWatch struct {
+	last string // "" when the last check passed
+}
+
+// Tick records one result and says whether the phone should hear about it.
+func (w *HealthWatch) Tick(fail string) *notify.Message {
+	if fail == "" {
+		w.last = ""
+		return nil
+	}
+	if w.last != "" {
+		w.last = fail
+		return nil
+	}
+	w.last = fail
+	return &notify.Message{
+		Title:    "bw2fabroker check failed",
+		Body:     fail,
+		Priority: 4,
+		Tags:     []string{"warning"},
+	}
+}
+
 // Health returns one row per dependency, in the order an operator reads them.
 func (s *Server) Health(ctx context.Context) []Health {
 	cfg := s.Config()
@@ -188,6 +216,12 @@ func (s *Server) noteNtfy(ok bool, title string, err error) {
 		st.Err = err.Error()
 	}
 	s.ntfyLast.Store(st)
+}
+
+// NoteNtfy records the outcome of an ntfy check from outside the api package, so that the
+// periodic health check in cmd/broker can show its result on the panel's ntfy card.
+func (s *Server) NoteNtfy(ok bool, title string, err error) {
+	s.noteNtfy(ok, title, err)
 }
 
 // bwStatus asks the vault for the bw status, when the vault can answer it.

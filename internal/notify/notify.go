@@ -178,6 +178,7 @@ type publish struct {
 	Message  string       `json:"message"`
 	Click    string       `json:"click,omitempty"`
 	Priority int          `json:"priority,omitempty"`
+	Firebase string       `json:"firebase,omitempty"` // "no" keeps a probe off the phone; headers are set too
 	Tags     []string     `json:"tags,omitempty"`
 	Actions  []actionBody `json:"actions,omitempty"`
 }
@@ -235,7 +236,7 @@ func (n *Ntfy) RequireAuth(ctx context.Context) error {
 	if err := n.probe(ctx, http.MethodGet, sub, nil, false); err != nil {
 		return err
 	}
-	authed, _ := json.Marshal(publish{Topic: n.Topic, Title: "bw2fabroker notification check", Message: "The broker reached this topic with its bearer token. No action needed.", Priority: 1})
+	authed, _ := json.Marshal(publish{Topic: n.Topic, Title: "bw2fabroker probe", Message: "The broker reached this topic with its bearer token.", Priority: 1, Firebase: "no"})
 	return n.probeAuthed(ctx, u.String(), authed)
 }
 

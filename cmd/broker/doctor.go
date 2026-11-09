@@ -52,7 +52,7 @@ func cmdDoctor() error {
 		if err := n.RequireAuth(ctx); err != nil {
 			bad("ntfy: " + err.Error())
 		} else {
-			ok("ntfy topic " + cfg.Ntfy.Topic + " rejects anonymous publish and read, and accepts the bearer token")
+			ok("ntfy topic " + cfg.Ntfy.Topic + " rejects anonymous publish and read, and accepts the bearer token (the probes stay silent; nothing is pushed)")
 			if canRead, err := n.CanRead(ctx); err == nil && canRead {
 				warn("the broker token can also read topic " + cfg.Ntfy.Topic + "; write-only is enough (deploy/ntfy/provision.sh sets it)")
 			}

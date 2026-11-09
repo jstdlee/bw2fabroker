@@ -215,6 +215,9 @@ func cmdStart(args []string) error {
 	go manageApprover(ctx, srv, holder, ts, log)
 	go syncLoop(ctx, bw, log)
 	go srv.RequestCleaner(ctx)
+	if n != nil {
+		go healthLoop(ctx, srv, n, bw, HealthCheckEvery, log)
+	}
 	if mode == "lan" {
 		go push(notify.Message{Title: "bw2fabroker is on the LAN", Body: "The approval page is bound to " + addr.String() + ". Any device on this network can open it. Approval still requires the approval password.", Priority: 4, Tags: []string{"warning"}})
 	}
@@ -396,6 +399,91 @@ func manageApprover(ctx context.Context, srv *api.Server, holder *configHolder, 
 			check()
 		}
 	}
+}
+
+// HealthCheckEvery is how often the periodic ntfy/vault health check runs.
+const HealthCheckEvery = 4 * time.Hour
+
+// healthLoop re-checks ntfy and the vault every `every`. A check that passes stays silent: the
+// ntfy probe asks the server not to deliver it, and nothing is pushed. When a check turns
+// failing after a passing one, ONE attention push goes out; a check that keeps failing pushes
+// nothing more, and recovery is recorded without a push. Every result is logged as an audit
+// event and shown on the admin panel's ntfy card.
+func healthLoop(ctx context.Context, srv *api.Server, n *notify.Ntfy, bw *vault.BW, every time.Duration, log *slog.Logger) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	var w api.HealthWatch
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		fail := checkHealthOnce(n, bw, func(ok bool, err error) { srv.NoteNtfy(ok, "health check", err) }, log)
+		if m := w.Tick(fail); m != nil {
+			// When ntfy itself is the failing part this send fails too; we still attempt it,
+			// and log the failure. Mirrors api.Server.push's best-effort shape.
+			go func(m notify.Message) {
+				pctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				if err := srv.Notifier.Send(pctx, m); err != nil {
+					log.Warn("ntfy send failed", slog.String("error", err.Error()))
+					srv.NoteNtfy(false, m.Title, err)
+				}
+			}(*m)
+		}
+	}
+}
+
+// ntfyProber and vaultStater are the parts of the real Ntfy and BW a health check needs. Tests
+// stand in with fakes.
+type ntfyProber interface {
+	RequireAuth(ctx context.Context) error
+}
+
+type vaultStater interface {
+	Status(ctx context.Context) (string, error)
+}
+
+// checkHealthOnce runs one check: the ntfy probes and the vault's `bw status`. Both probes carry
+// their own short timeout, so a check finishes even when the start context is shutting down. It
+// records both outcomes (note) and the audit log, and returns what failed — "" when everything
+// is fine.
+func checkHealthOnce(n ntfyProber, bw vaultStater, note func(ok bool, err error), log *slog.Logger) string {
+	var parts []string
+	if n != nil {
+		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := n.RequireAuth(cctx)
+		cancel()
+		note(err == nil, err)
+		if err != nil {
+			log.Info("audit", slog.String("event", "ntfy_check"), slog.Bool("ok", false), slog.String("error", err.Error()))
+			parts = append(parts, "ntfy unreadable: "+err.Error())
+		} else {
+			log.Info("audit", slog.String("event", "ntfy_check"), slog.Bool("ok", true))
+		}
+	}
+	if bw != nil {
+		sctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		st, err := bw.Status(sctx)
+		cancel()
+		if err != nil {
+			log.Info("audit", slog.String("event", "vault_check"), slog.Bool("ok", false), slog.String("error", err.Error()))
+			parts = append(parts, "vault did not answer: "+err.Error())
+		} else {
+			switch st {
+			case "unauthenticated":
+				log.Info("audit", slog.String("event", "vault_check"), slog.Bool("ok", false), slog.String("state", st))
+				parts = append(parts, "vault unauthenticated: bw is not logged in")
+			case "locked":
+				log.Info("audit", slog.String("event", "vault_check"), slog.Bool("ok", false), slog.String("state", st))
+				parts = append(parts, "vault locked")
+			default:
+				log.Info("audit", slog.String("event", "vault_check"), slog.Bool("ok", true))
+			}
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 func syncLoop(ctx context.Context, bw *vault.BW, log *slog.Logger) {
