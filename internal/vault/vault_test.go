@@ -187,3 +187,53 @@ exit 0
 		t.Fatalf("failed login returned %v", err)
 	}
 }
+
+func TestSetServerLeavesTheCurrentServerAlone(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "calls")
+	script := filepath.Join(dir, "bw")
+	body := `#!/bin/sh
+if [ "$1" = "status" ]; then echo '{"serverUrl":"https://vault.bitwarden.com","status":"locked"}'; exit 0; fi
+if [ "$1 $2" = "config server" ]; then echo "$3" >> "` + logPath + `"; exit 0; fi
+echo "unexpected: $*" >&2; exit 2
+`
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b := NewBW(script, dir)
+	ctx := context.Background()
+
+	if err := b.SetServer(ctx, "https://vault.bitwarden.com/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(logPath); err == nil {
+		t.Fatal("config server ran although the profile is already on that server")
+	}
+
+	if err := b.SetServer(ctx, "https://other.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(calls), "https://other.example.com") {
+		t.Fatalf("config server did not run: %q", calls)
+	}
+}
+
+func TestSetServerExplainsLogoutRequired(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "bw")
+	body := `#!/bin/sh
+if [ "$1" = "status" ]; then echo '{"serverUrl":"https://a.example.com","status":"authenticated"}'; exit 0; fi
+echo "Logout required before server config update." >&2; exit 1
+`
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := NewBW(script, dir).SetServer(context.Background(), "https://b.example.com")
+	if err == nil || !strings.Contains(err.Error(), "bw logout") {
+		t.Fatalf("logout requirement not explained: %v", err)
+	}
+}
