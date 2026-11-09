@@ -391,7 +391,7 @@ service setup, Bitwarden Secrets Manager.
 
 No open questions block milestone 1.
 
-## Progress and gaps (2026-11-08)
+## Progress and gaps (2026-11-09)
 
 ### Done
 
@@ -402,6 +402,17 @@ No open questions block milestone 1.
   the approver bind, the agent HTTP listen address, ntfy, agents (add, remove, resume), auto
   rules, authenticator enrollment and item tags, a name-only vault search, and admin-token
   rotation. It does not run arbitrary `bw` commands.
+- The panel opens with the state of every dependency (vault, notifications, Tailscale, approval
+  page, agent API). Each row has a lamp and a word, so the state does not depend on colour, and
+  the three dependencies that can be checked have a **Test** button.
+- Next to the panel the broker serves an overview and three guides on loopback: `/` (what the
+  broker is doing now and how a request moves), `/agent` (tokens, the API, the CLI, the rules),
+  `/mcp` (the client configuration, tools, resources, prompts), and `/api` (the REST reference).
+- The pages share one design: system font, light and dark, cards and rows, no colour-only state.
+  The approval page is phone-first: the request facts, the reason, the countdown, one big
+  Approve button and one Deny button.
+- The ntfy push carries the item name, the field, the agent name, and the reason, and has one
+  action button that opens the request.
 - Agents call HTTP with a bearer token. There is no agent unix socket. A config where the admin
   token hash equals an agent token hash is refused, and each API rejects the other token.
 - The running broker reloads the config file when the panel writes it. A broken file keeps the
@@ -412,7 +423,15 @@ No open questions block milestone 1.
 - The contract also allows `notes`, `card:<part>`, `identity:<part>`, and `attachment:<file>`.
 - The audit log is `audit.jsonl` next to the config (seven days) and one JSON line on stderr.
   It does not hold a value or a password.
-- `broker demo` serves a fake vault on localhost, with the same approval page.
+- `broker init` writes a `.env` next to the config with the credentials the broker needs. The
+  broker reads it at startup; `broker-get` and `broker-mcp` read the same file from the working
+  directory for `BROKER_URL` and `BROKER_TOKEN`. A variable already in the environment wins.
+- The broker host is the trust root, and the broker says so: `doctor` checks that the Bitwarden
+  CLI data directory is private to the broker user, that the `bw` binary is executable, and that
+  the Docker socket is not world-accessible. The systemd unit runs as its own user with
+  `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, and a capability bounding set of nothing.
+- `broker demo` serves a fake vault on localhost, with the same approval page, the same admin
+  panel, and the same guides.
 - `go test -tags e2e ./e2e` starts Vaultwarden in Docker, registers an account in the current
   master-password unlock shape, and logs in with `bw` 2026.10.0. It then asks for the login
   password, approves that request on the tailnet page, and checks the value is returned once.
@@ -424,14 +443,20 @@ No open questions block milestone 1.
   separate listeners, and a forged link), admin and agent token separation, the ntfy domain
   checks, `broker-get` exit codes, and `--env` redacting the value. The vault adapter test reads
   notes, card, identity, and an attachment from a fake `bw`.
-- `broker-mcp` is a stdio MCP server (`list_items`, `search_items`, `request_field`) over the same HTTP API. `broker-get` and `broker-mcp` share `internal/agentapi`.
+- The MCP protocol lives in `internal/mcpserver`, transport independent. `broker-mcp` serves it on
+  stdio; the broker serves the same protocol over HTTP at `/mcp` on the agent listener, with the
+  same bearer token. Tools: `list_items`, `search_items`, `request_field`, `broker_status`.
+  Resources: `broker://contract`, `broker://setup`, `broker://fields`, `broker://policy`.
+  Prompts: `request-field`, `setup-mcp`. `broker-get` and `broker-mcp` share `internal/agentapi`.
+- The catalog answers with the documented keys: `{"items":[{"id","name","folder","fields"}]}`.
 
 ### Gaps
 
 - No test sends a push to a real phone. The approval page in the disposable-vault test is the
   broker's own handler, with a captured link, not an iPhone.
 - Bitwarden cloud is still a manual check before a release (§16).
-- The admin panel has handler tests for token separation, not a browser pass.
+- The pages were checked in a browser by hand, with screenshots in `docs/gallery/`. There is no
+  browser test in CI.
 - The systemd unit and the compose Tailscale sidecar are documented and not exercised.
   CI builds the image and checks `broker version` and `bw --version`. It does not boot
   the image against Tailscale.

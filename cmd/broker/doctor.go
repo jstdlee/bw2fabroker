@@ -95,6 +95,28 @@ func cmdDoctor() error {
 		}
 		ok(line)
 	}
+	if err := vault.CheckBinary(cfg.Vault.BWPath); err != nil {
+		bad(err.Error())
+	} else {
+		ok("bw CLI is executable")
+	}
+	dir := cfg.Vault.AppData
+	if dir == "" {
+		dir = vault.DefaultAppData()
+	}
+	iso, isoErr := vault.Inspect(dir)
+	switch {
+	case isoErr != nil:
+		warn("Bitwarden CLI data directory: " + isoErr.Error())
+	case vault.InContainer():
+		ok("Bitwarden CLI data directory " + iso.Path + " (the container is the boundary)")
+	case iso.Mode.Perm()&0o077 != 0:
+		bad(fmt.Sprintf("the Bitwarden CLI data directory %s is readable by other users (mode %04o); the broker must be the only holder of the agents account. Fix: chmod 700 %s", iso.Path, iso.Mode.Perm(), iso.Path))
+	case iso.Foreign:
+		warn("the Bitwarden CLI data directory " + iso.Path + " belongs to another user")
+	default:
+		ok("the Bitwarden CLI data directory " + iso.Path + " is private to this user")
+	}
 
 	if fi, err := os.Stat("/var/run/docker.sock"); err == nil && fi.Mode().Perm()&0o006 != 0 {
 		warn("/var/run/docker.sock is world-accessible; anyone with Docker access is root and can read the broker")

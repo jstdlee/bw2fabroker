@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/jstdlee/bw2fabroker/internal/agentapi"
+	"github.com/jstdlee/bw2fabroker/internal/config"
 	"github.com/jstdlee/bw2fabroker/internal/contract"
 )
 
@@ -102,6 +103,10 @@ list and search print names and field names, never values.
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	if _, _, err := config.LoadDotEnvFrom(config.ClientAppDirs()...); err != nil {
+		fmt.Fprintln(os.Stderr, "broker-get:", err)
+		return 2
+	}
 	o, err := parseArgs(args)
 	if err != nil {
 		if err.Error() != "help" {

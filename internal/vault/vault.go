@@ -27,10 +27,10 @@ type Item struct {
 
 // CatalogItem is one item as list and search return it. Fields are names only.
 type CatalogItem struct {
-	ID     string
-	Name   string
-	Folder string
-	Fields []string
+	ID     string   `json:"id"`
+	Name   string   `json:"name"`
+	Folder string   `json:"folder"`
+	Fields []string `json:"fields"`
 }
 
 // Errors.
@@ -52,8 +52,6 @@ type Vault interface {
 	// Search and List return names and field names. They do not return values.
 	Search(ctx context.Context, query string) ([]CatalogItem, error)
 	List(ctx context.Context) ([]CatalogItem, error)
-	// Exec runs bw for the admin mirror. stdout may contain secrets; the audit log must not store it.
-	Exec(ctx context.Context, args []string) (stdout, stderr string, err error)
 	Sync(ctx context.Context) error
 }
 

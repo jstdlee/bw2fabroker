@@ -1,17 +1,14 @@
 package vault
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/jstdlee/bw2fabroker/internal/contract"
 )
@@ -223,41 +220,6 @@ func (b *BW) readAttachment(ctx context.Context, itemID, name string) (string, e
 		return "", err
 	}
 	return string(buf[:n]), nil
-}
-
-// Exec runs bw with the broker session. The caller must not write stdout into the audit log.
-func (b *BW) Exec(ctx context.Context, args []string) (string, string, error) {
-	if len(args) == 0 || len(args) > 32 {
-		return "", "", errors.New("bw needs 1 to 32 arguments")
-	}
-	for _, a := range args {
-		if a == "" || len(a) > 500 || strings.ContainsAny(a, "\n\r\x00") {
-			return "", "", errors.New("bad bw argument")
-		}
-	}
-	withSession := b.Unlocked()
-	if !withSession && args[0] != "status" && args[0] != "login" && args[0] != "config" && args[0] != "logout" {
-		return "", "", ErrLocked
-	}
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, b.Path, append(args, "--nointeraction")...)
-	var extra []string
-	if withSession {
-		b.mu.RLock()
-		extra = append(extra, "BW_SESSION="+b.session)
-		b.mu.RUnlock()
-	}
-	cmd.Env = b.env(extra...)
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errb
-	err := cmd.Run()
-	stderr := strings.TrimSpace(errb.String())
-	if len(stderr) > 400 {
-		stderr = stderr[:400]
-	}
-	return out.String(), stderr, err
 }
 
 func derefField(p *string) (string, error) {

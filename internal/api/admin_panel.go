@@ -21,152 +21,208 @@ import (
 var adminPage = template.Must(template.New("admin").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>bw2fabroker admin</title>
-<style>
-:root {
-  color-scheme: light;
-  --bg: #f5f5f7;
-  --card: #fff;
-  --fg: #1d1d1f;
-  --muted: #6e6e73;
-  --line: rgba(0,0,0,.08);
-  --blue: #0071e3;
-  --red: #d70015;
-  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 12px 32px rgba(0,0,0,.06);
-  font: 17px/1.47 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
-}
-@media (prefers-reduced-transparency: reduce) { :root { --card: #fff; } }
-body { margin: 0; background: var(--bg); color: var(--fg); }
-main { max-width: 40rem; margin: 0 auto; padding: 2.75rem 1.25rem 4rem; }
-h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.022em; line-height: 1.1; margin: 0 0 .35rem; }
-h2 { font-size: .75rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 .7rem; }
-p, li { margin: .4rem 0; }
-.lead { color: var(--muted); font-size: .95rem; margin-bottom: 1.25rem; }
-section { background: var(--card); border-radius: 18px; box-shadow: var(--shadow); padding: 1.05rem 1.15rem 1.15rem; margin: 0 0 1.15rem; }
-label { display: block; font-size: .82rem; font-weight: 600; margin: .85rem 0 .3rem; }
-input, button { font: inherit; }
-input { width: 100%; box-sizing: border-box; padding: .7rem .8rem; border-radius: 12px; border: 1px solid var(--line); background: #fff; color: var(--fg); }
-input:focus { outline: 2px solid #b3d7ff; border-color: var(--blue); }
-button { border: 0; border-radius: 980px; padding: .55rem 1.05rem; background: var(--blue); color: #fff; font-weight: 600; }
-button:active { transform: scale(.97); }
-button.quiet { background: #e8e8ed; color: var(--fg); }
-button.danger { background: transparent; color: var(--red); }
-.warn { color: var(--red); font-weight: 600; }
-.ok { color: #1d7a3a; font-weight: 600; }
-code { font-size: .92em; overflow-wrap: anywhere; }
-form.row { display: inline; }
-form.row button { padding: .3rem .7rem; margin-left: .3rem; }
-@media (prefers-reduced-motion: reduce) { button:active { transform: none; } }
-</style></head><body><main>
+<style>` + designCSS + `</style></head><body><main>
+<div class="tabs">
+<a href="/">Overview</a><a href="/agent">Agents</a><a href="/mcp">MCP</a><a href="/api">API</a><a class="on" href="/admin">Admin</a>
+</div>
 {{if .Login}}
-<h1>bw2fabroker admin</h1>
-<p>This page is only on this machine. Agents do not use it.</p>
+<h1>bw2fabroker</h1>
+<p class="lead">This page is only on this machine. Agents do not use it.</p>
+{{if .Notice}}<p class="notice bad">{{.Notice}}</p>{{end}}
+<div class="card"><div class="row stack">
 <form method="post" action="/admin/login">
-<label for="token">Admin token</label>
-<input id="token" name="token" type="password" autocomplete="current-password" required>
-<p><button type="submit">Enter</button></p>
+<div class="t">Admin token</div>
+<div class="d">The key from <code>broker init</code> or the credential file.</div>
+<div class="f" style="margin-top:8px"><input name="token" type="password" autocomplete="current-password" required><button class="primary" type="submit">Enter</button></div>
 </form>
-{{if .Notice}}<p class="warn">{{.Notice}}</p>{{end}}
+</div></div>
 {{else}}
 <h1>bw2fabroker</h1>
-<p>Loopback admin only. An agent calls the HTTP API with its own bearer token. It cannot open this page, and this token is not an agent token.</p>
-<p>Phone page: <strong>{{.Mode}}</strong> {{.Host}}:{{.Port}}{{if .Public}} (links use {{.Public}}){{end}}</p>
-{{if .LAN}}<p class="warn">LAN mode. A device on this network can open the approval page. The page still asks for the approval password.</p>{{end}}
-<p>Vault: {{if .Unlocked}}<span class="ok">unlocked</span>{{else}}<span class="warn">locked</span>{{end}}</p>
-<section><h2>Bitwarden server</h2>
-<p>Bitwarden cloud, Vaultwarden, or Bitwarden's own self-hosted server. HTTPS, or HTTP only on localhost, a private address, or a tailnet address. Saving this runs <code>bw config server</code>. Startup does it again.</p>
-<form method="post" action="/admin/vault">
-<label for="vault_server">Server URL</label>
-<input id="vault_server" name="server" value="{{.VaultServer}}" placeholder="https://vault.example.com" autocomplete="off">
-<p><button type="submit">Save server</button></p>
-</form></section>
-{{if .Notice}}<p>{{.Notice}}</p>{{end}}
-{{if .Secret}}<p>Shown once. It is not stored in the page after you leave. <code>{{.Secret}}</code></p>{{end}}
-<section><h2>Approval password</h2>
-<p>The password typed on the phone. Not the Bitwarden master password.</p>
-<form method="post" action="/admin/password">
-<label for="password">New password</label>
-<input id="password" name="password" type="password" autocomplete="new-password" required>
-<label for="again">Repeat</label>
-<input id="again" name="again" type="password" autocomplete="new-password" required>
-<p><button type="submit">Change approval password</button></p>
-</form></section>
-<section><h2>Where the phone connects</h2>
-<p>A tailnet address or one private LAN address. The approval port updates within 30 seconds. The agent address needs a restart of the broker.</p>
-<form method="post" action="/admin/bind">
-<label for="host">Approval host</label>
-<input id="host" name="host" value="{{.Host}}" placeholder="100.x.y.z or a LAN address">
-<label for="port">Approval port</label>
-<input id="port" name="port" value="{{.Port}}" inputmode="numeric">
-<label for="public_host">Name used in links</label>
-<input id="public_host" name="public_host" value="{{.Public}}" placeholder="optional">
-<label for="agent_listen">Agent HTTP listen</label>
-<input id="agent_listen" name="agent_listen" value="{{.AgentListen}}" placeholder="100.x.y.z:8786">
-<p><button type="submit">Save addresses</button></p>
-</form></section>
-<section><h2>Notifications</h2>
-<p>The topic must reject requests that have no bearer token. Leave every field empty to run without notifications; approval links then appear in the log and under "Waiting for approval".</p>
-<form method="post" action="/admin/ntfy">
-<label for="url">URL</label>
-<input id="url" name="url" value="{{.NtfyURL}}" autocomplete="off">
-<label for="domain">Own domain</label>
-<input id="domain" name="domain" value="{{.Domain}}" autocomplete="off">
-<label for="topic">Topic</label>
-<input id="topic" name="topic" value="{{.Topic}}" autocomplete="off">
-<label for="ntfy_token">Bearer token</label>
-<input id="ntfy_token" name="token" type="password" placeholder="leave blank to keep the current token" autocomplete="off">
-<p><button type="submit">Save notifications</button></p>
+<p class="lead">Admin panel. Loopback only. An agent calls the HTTP API with its own token and cannot open this page.</p>
+{{if .Notice}}<p class="notice {{.NoticeKind}}">{{.Notice}}</p>{{end}}
+{{if .Secret}}<p class="notice ok">Shown once. Copy it now; it is not stored in this page.<br><span class="secret">{{.Secret}}</span></p>{{end}}
+
+<h2>Status</h2>
+<div class="card">
+{{range .Health}}
+<div class="row">
+<div class="grow"><div class="t">{{.Name}}</div><div class="d">{{.Detail}}</div></div>
+<div class="c"><span class="lamp {{.State}}"></span><span class="state {{.State}}">{{.Value}}</span>
+{{if .Test}}<form class="inline" method="post" action="/admin/test/{{.Test}}"><button class="quiet" type="submit">Test</button></form>{{end}}
+</div>
+</div>
+{{end}}
+{{if not .Unlocked}}
+<div class="row stack">
+<div class="t">Unlock the vault</div>
+<div class="d">The master password of the agents account. It is used once and never written down.</div>
+<form class="f" method="post" action="/admin/unlock">
+<input name="password" type="password" placeholder="Bitwarden master password" autocomplete="off" required>
+<button class="primary" type="submit">Unlock</button>
 </form>
-<form method="post" action="/admin/ntfy/test"><button type="submit">Send a test notification</button></form></section>
-<section><h2>Waiting for approval</h2>
-{{if .Pending}}<ul>{{range .Pending}}<li><a href="{{.Link}}">{{.Item}} / {{.Field}}</a> for {{.Agent}} — {{.Reason}} (expires {{.Expires.Format "15:04:05"}})</li>{{end}}</ul>
-{{else}}<p>No request is waiting.</p>{{end}}</section>
-<section><h2>Agents</h2>
-<p>Adding an agent shows its bearer token once. Resume clears a suspension after three denials. Remove deletes the token.</p>
-<ul>{{range .Agents}}<li>{{.}}
-<form class="row" method="post" action="/admin/agent/resume"><input type="hidden" name="name" value="{{.}}"><button class="quiet" type="submit">Resume</button></form>
-<form class="row" method="post" action="/admin/agent/remove"><input type="hidden" name="name" value="{{.}}"><button class="danger" type="submit">Remove</button></form>
-</li>{{end}}</ul>
-<form method="post" action="/admin/agent/add">
-<label for="agent_name">Name</label>
-<input id="agent_name" name="name" placeholder="letters, digits, _ or -" required>
-<p><button type="submit">Add agent</button></p>
-</form></section>
-<section><h2>Auto rules</h2>
-<p>These items are returned without asking. A TOTP field is never automatic.</p>
-<ul>{{range .Rules}}<li><code>{{.ItemID}}</code> {{if .Field}}{{.Field}}{{else}}any field except totp{{end}}
-<form class="row" method="post" action="/admin/auto/remove"><input type="hidden" name="item" value="{{.ItemID}}"><input type="hidden" name="field" value="{{.Field}}"><button class="quiet" type="submit">Remove</button></form>
-</li>{{end}}</ul>
-<form method="post" action="/admin/auto/add">
-<label for="auto_item">Item id</label>
-<input id="auto_item" name="item" required>
-<label for="auto_field">Field</label>
-<input id="auto_field" name="field" placeholder="blank means any field except totp">
-<p><button type="submit">Allow without asking</button></p>
-</form></section>
-<section><h2>Authenticator</h2>
-<p>Enroll replaces the secret. The old authenticator app stops working. The new address is shown once; add it before you leave this page.</p>
-<form method="post" action="/admin/2fa/enroll"><button type="submit">Create authenticator secret</button></form>
-<ul>{{range .TwoFA}}<li><code>{{.}}</code>
-<form class="row" method="post" action="/admin/2fa/remove"><input type="hidden" name="item" value="{{.}}"><button type="submit">Stop asking</button></form>
-</li>{{end}}</ul>
-<form method="post" action="/admin/2fa/add">
-<label for="twofa_item">Item id that asks for a code</label>
-<input id="twofa_item" name="item" required>
-<p><button type="submit">Require a code</button></p>
-</form></section>
-<section><h2>Vault names</h2>
-<p>Names and field names only. This page cannot run arbitrary Bitwarden commands.</p>
-<form method="get" action="/admin/search">
-<label for="q">Search</label>
-<input id="q" name="q" value="{{.Query}}">
-<p><button type="submit">Search</button></p>
-</form>
-<ul>{{range .Items}}<li>{{.Name}}{{if .Folder}} ({{.Folder}}){{end}} <code>{{.ID}}</code> {{.Fields}}</li>{{end}}</ul>
-</section>
-<section><h2>Admin token</h2>
-<p>Replacing the token signs this browser in with the new one. The old token stops working.</p>
-<form method="post" action="/admin/token"><button type="submit">Replace admin token</button></form>
-</section>
+</div>
+{{end}}
+</div>
+
+<h2>Bitwarden</h2>
+<div class="card">
+<div class="row">
+<div class="grow"><div class="t">Server</div><div class="d">Bitwarden cloud, Vaultwarden, or your own self-hosted server. Saving this runs <code>bw config server</code>. Startup does it again.</div></div>
+<div class="c"><form class="f" method="post" action="/admin/vault">
+<input name="server" value="{{.VaultServer}}" placeholder="https://vault.example.com" autocomplete="off">
+<button class="primary" type="submit">Save</button></form></div>
+</div>
+<div class="row stack">
+<div class="t">Approval password</div>
+<div class="d">The password you type on the phone. Not the Bitwarden master password.</div>
+<form class="f" method="post" action="/admin/password">
+<input name="password" type="password" placeholder="New password" autocomplete="new-password" required>
+<input name="again" type="password" placeholder="Repeat" autocomplete="new-password" required>
+<button class="primary" type="submit">Change</button></form>
+</div>
+</div>
+
+<h2>Addresses</h2>
+<div class="card">
+<div class="row">
+<div class="grow"><div class="t">Phone page</div><div class="d">A tailnet address or one private LAN address. The approval port updates within 30 seconds. The agent address needs a restart.</div></div>
+</div>
+<div class="row">
+<div class="grow"><div class="t">Approval host</div><div class="d">The address your phone opens. A tailnet IP, or a hostname on the LAN.</div></div>
+<div class="c"><form class="f" method="post" action="/admin/bind">
+<input name="host" value="{{.Host}}" placeholder="100.x.y.z" autocomplete="off">
+<button class="quiet" type="submit">Save</button></form></div>
+</div>
+<div class="row">
+<div class="grow"><div class="t">Approval port</div><div class="d">The port in the approval link.</div></div>
+<div class="c"><form class="f tight" method="post" action="/admin/bind">
+<input name="port" value="{{.Port}}" inputmode="numeric">
+<button class="quiet" type="submit">Save</button></form></div>
+</div>
+<div class="row">
+<div class="grow"><div class="t">Name in links</div><div class="d">Optional. The host name used in the link your phone opens, such as a MagicDNS name.</div></div>
+<div class="c"><form class="f" method="post" action="/admin/bind">
+<input name="public_host" value="{{.Public}}" placeholder="optional" autocomplete="off">
+<button class="quiet" type="submit">Save</button></form></div>
+</div>
+<div class="row">
+<div class="grow"><div class="t">Agent API</div><div class="d">Where agents connect. This needs a restart of the broker.</div></div>
+<div class="c"><form class="f" method="post" action="/admin/bind">
+<input name="agent_listen" value="{{.AgentListen}}" placeholder="100.x.y.z:8786" autocomplete="off">
+<button class="quiet" type="submit">Save</button></form></div>
+</div>
+</div>
+
+<h2>Notifications</h2>
+<div class="card">
+<div class="row stack">
+<div class="t">ntfy</div>
+<div class="d">Your own ntfy server. The broker refuses ntfy.sh and plain http, and the topic must reject requests with no bearer token. Leave every field empty to run without notifications; approval links then appear in the log and under “Waiting”.</div>
+<form class="f" method="post" action="/admin/ntfy">
+<input name="url" value="{{.NtfyURL}}" placeholder="https://ntfy.example.com" autocomplete="off">
+<input name="domain" value="{{.Domain}}" placeholder="ntfy.example.com" autocomplete="off">
+<input name="topic" value="{{.Topic}}" placeholder="bw-approvals" autocomplete="off">
+<input name="token" type="password" placeholder="unchanged" autocomplete="off">
+<button class="primary" type="submit">Save notifications</button></form>
+<form class="inline" method="post" action="/admin/ntfy/test"><button class="quiet" type="submit">Send a test notification</button></form>
+</div>
+</div>
+
+<h2>Waiting</h2>
+<div class="card">
+{{if .Pending}}
+{{range .Pending}}
+<div class="row">
+<div class="grow"><div class="t">{{.Item}} / {{.Field}}</div><div class="d">for {{.Agent}} — {{.Reason}}</div></div>
+<div class="c"><span class="state">expires {{.Expires.Format "15:04:05"}}</span><a class="quiet" href="{{.Link}}">Open</a></div>
+</div>
+{{end}}
+{{else}}
+<div class="row">
+<div class="grow"><div class="t">No request is waiting</div><div class="d">When nothing is configured for notifications, the links of pending requests appear here for 120 seconds.</div></div>
+</div>
+{{end}}
+</div>
+
+<h2>Agents</h2>
+<div class="card">
+{{range .Agents}}
+<div class="row">
+<div class="grow"><div class="t">{{.}}</div><div class="d">Bearer token for this agent. Shown once when it was added.</div></div>
+<div class="c">
+<form class="inline" method="post" action="/admin/agent/resume"><input type="hidden" name="name" value="{{.}}"><button class="quiet" type="submit">Resume</button></form>
+<form class="inline" method="post" action="/admin/agent/remove"><input type="hidden" name="name" value="{{.}}"><button class="danger" type="submit">Remove</button></form>
+</div>
+</div>
+{{end}}
+<div class="row">
+<div class="grow"><div class="t">Add an agent</div><div class="d">The token is shown once. Resume clears a suspension after three denials.</div></div>
+<div class="c"><form class="f tight" method="post" action="/admin/agent/add">
+<input name="name" placeholder="name" autocomplete="off" required>
+<button class="primary" type="submit">Add</button></form></div>
+</div>
+</div>
+
+<h2>Auto rules</h2>
+<div class="card">
+{{range .Rules}}
+<div class="row">
+<div class="grow"><div class="t"><code>{{.ItemID}}</code></div><div class="d">{{if .Field}}{{.Field}}{{else}}any field except totp{{end}}</div></div>
+<div class="c"><form class="inline" method="post" action="/admin/auto/remove"><input type="hidden" name="item" value="{{.ItemID}}"><input type="hidden" name="field" value="{{.Field}}"><button class="quiet" type="submit">Remove</button></form></div>
+</div>
+{{end}}
+<div class="row">
+<div class="grow"><div class="t">Allow without asking</div><div class="d">These items are returned to the agent without a phone approval. A TOTP field is never automatic.</div></div>
+<div class="c"><form class="f tight" method="post" action="/admin/auto/add">
+<input name="item" placeholder="item id" required>
+<input name="field" placeholder="field" autocomplete="off">
+<button class="primary" type="submit">Add</button></form></div>
+</div>
+</div>
+
+<h2>Authenticator</h2>
+<div class="card">
+{{range .TwoFA}}
+<div class="row">
+<div class="grow"><div class="t"><code>{{.}}</code></div><div class="d">Asks for a code before this item is approved.</div></div>
+<div class="c"><form class="inline" method="post" action="/admin/2fa/remove"><input type="hidden" name="item" value="{{.}}"><button class="quiet" type="submit">Stop asking</button></form></div>
+</div>
+{{end}}
+<div class="row">
+<div class="grow"><div class="t">Enrol</div><div class="d">Replaces the secret. The old authenticator app stops working. The new address is shown once.</div></div>
+<div class="c"><form class="inline" method="post" action="/admin/2fa/enroll"><button class="quiet" type="submit">Create secret</button></form></div>
+</div>
+<div class="row">
+<div class="grow"><div class="t">Require a code</div><div class="d">The item id that asks for a code before it is approved.</div></div>
+<div class="c"><form class="f tight" method="post" action="/admin/2fa/add">
+<input name="item" placeholder="item id" required>
+<button class="primary" type="submit">Add</button></form></div>
+</div>
+</div>
+
+<h2>Vault names</h2>
+<div class="card">
+<div class="row">
+<div class="grow"><div class="t">Search</div><div class="d">Names and field names only. This page cannot run arbitrary Bitwarden commands.</div></div>
+<div class="c"><form class="f tight" method="get" action="/admin/search">
+<input name="q" value="{{.Query}}" placeholder="name" autocomplete="off">
+<button class="quiet" type="submit">Search</button></form></div>
+</div>
+{{range .Items}}
+<div class="row">
+<div class="grow"><div class="t">{{.Name}}{{if .Folder}} <span class="state">({{.Folder}})</span>{{end}}</div><div class="d"><code>{{.ID}}</code> · {{.Fields}}</div></div>
+</div>
+{{end}}
+</div>
+
+<h2>Admin token</h2>
+<div class="card">
+<div class="row">
+<div class="grow"><div class="t">Replace the token</div><div class="d">Signs this browser in with the new one. The old token stops working.</div></div>
+<div class="c"><form class="inline" method="post" action="/admin/token"><button class="danger" type="submit">Replace token</button></form></div>
+</div>
+</div>
+<p class="foot">bw2fabroker {{.Version}} · the panel answers on loopback only</p>
 {{end}}
 </main>
 </body></html>`))
@@ -177,15 +233,17 @@ type adminPending struct {
 }
 
 type adminView struct {
-	Login                                                                                             bool
-	Mode, Host, Public, NtfyURL, Domain, Topic, Notice, Secret, Query, AgentListen, Bind, VaultServer string
-	Port                                                                                              int
-	LAN, Unlocked                                                                                     bool
-	Agents                                                                                            []string
-	Pending                                                                                           []adminPending
-	Rules                                                                                             []config.AutoRule
-	TwoFA                                                                                             []string
-	Items                                                                                             []adminItem
+	Login                                                                                                   bool
+	Mode, Host, Public, NtfyURL, Domain, Topic, Notice, NoticeKind, Secret, Query, AgentListen, VaultServer string
+	Version                                                                                                 string
+	Port                                                                                                    int
+	LAN, Unlocked                                                                                           bool
+	Health                                                                                                  []Health
+	Agents                                                                                                  []string
+	Pending                                                                                                 []adminPending
+	Rules                                                                                                   []config.AutoRule
+	TwoFA                                                                                                   []string
+	Items                                                                                                   []adminItem
 }
 
 type adminItem struct {
@@ -204,12 +262,20 @@ func (s *Server) AdminHandler() http.Handler {
 			return
 		}
 		if !s.adminAuthed(r) {
-			s.adminRender(w, r, adminView{Login: true})
+			s.adminRender(w, r, adminView{Login: true, Version: s.Version})
 			return
 		}
 		switch {
-		case r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "/admin" || r.URL.Path == "/admin/search"):
-			s.adminHome(w, r, "")
+		case r.Method == http.MethodGet && (r.URL.Path == "/admin" || r.URL.Path == "/admin/" || r.URL.Path == "/admin/search"):
+			s.adminHome(w, r, "", "")
+		case r.Method == http.MethodPost && r.URL.Path == "/admin/test/ntfy":
+			s.adminTest(w, r, "ntfy")
+		case r.Method == http.MethodPost && r.URL.Path == "/admin/test/tailscale":
+			s.adminTest(w, r, "tailscale")
+		case r.Method == http.MethodPost && r.URL.Path == "/admin/test/vault":
+			s.adminTest(w, r, "vault")
+		case r.Method == http.MethodPost && r.URL.Path == "/admin/unlock":
+			s.adminUnlock(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/admin/bind":
 			s.adminBind(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/admin/ntfy":
@@ -250,10 +316,10 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.adminTokenOK(r.PostForm.Get("token")) {
-		s.adminRender(w, r, adminView{Login: true, Notice: "Wrong token."})
+		s.adminRender(w, r, adminView{Login: true, Notice: "Wrong token.", NoticeKind: "bad", Version: s.Version})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "broker_admin", Value: strings.TrimSpace(r.PostForm.Get("token")), Path: "/admin", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: "broker_admin", Value: strings.TrimSpace(r.PostForm.Get("token")), Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }
 
@@ -292,11 +358,28 @@ func tokenMatches(storedHex, token string) bool {
 	return subtle.ConstantTimeCompare(sum[:], h) == 1
 }
 
-func (s *Server) adminHome(w http.ResponseWriter, r *http.Request, notice string) {
-	var v adminView
-	s.fill(r, &v)
-	v.Notice = notice
-	v.Query = r.URL.Query().Get("q")
+func (s *Server) adminHome(w http.ResponseWriter, r *http.Request, notice, kind string) {
+	cfg := s.Config()
+	v := adminView{
+		Mode: s.BindMode(), Host: cfg.Approver.BindHost, Public: cfg.Approver.PublicHost,
+		Port: cfg.Approver.Port, NtfyURL: cfg.Ntfy.URL, Domain: cfg.Ntfy.OwnDomain, Topic: cfg.Ntfy.Topic,
+		LAN: s.allowLAN.Load(), Unlocked: s.Vault.Unlocked(), Agents: cfg.AgentNames(), Rules: cfg.Auto, TwoFA: cfg.TwoFA.Items,
+		AgentListen: cfg.Agent.Listen, VaultServer: cfg.Vault.Server,
+		Notice: notice, NoticeKind: kind, Query: r.URL.Query().Get("q"), Version: s.Version,
+	}
+	if cfg.Approver.BindIP != "" {
+		v.Host = cfg.Approver.BindIP
+	}
+	if s.Linker != nil {
+		base, _ := s.linkBase.Load().(string)
+		for _, pr := range s.Store.Open() {
+			v.Pending = append(v.Pending, adminPending{
+				Agent: pr.Agent, Item: pr.Item.Name, Field: pr.Field.String(), Reason: pr.Reason,
+				Link: base + "/a/" + s.Linker.Sign(pr.ID, pr.Expires), Expires: pr.Expires,
+			})
+		}
+	}
+	v.Health = s.Health(r.Context())
 	if v.Query != "" && s.Vault.Unlocked() {
 		items, err := s.Vault.Search(r.Context(), v.Query)
 		if err == nil {
@@ -311,9 +394,42 @@ func (s *Server) adminHome(w http.ResponseWriter, r *http.Request, notice string
 func (s *Server) adminRender(w http.ResponseWriter, _ *http.Request, v adminView) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_ = adminPage.Execute(w, v)
+}
+
+// adminTest runs one dependency check and shows the result.
+func (s *Server) adminTest(w http.ResponseWriter, r *http.Request, what string) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	kind, msg := s.Test(ctx, what)
+	s.adminHome(w, r, msg, kind)
+}
+
+// adminUnlock unlocks the vault with the master password of the agents account.
+func (s *Server) adminUnlock(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	pw := r.PostForm.Get("password")
+	if strings.TrimSpace(pw) == "" {
+		s.adminHome(w, r, "Type the master password of the agents account.", "bad")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	if err := s.UnlockVault(ctx, pw); err != nil {
+		s.adminHome(w, r, "The vault did not unlock: "+err.Error(), "bad")
+		return
+	}
+	s.adminHome(w, r, "The vault is unlocked.", "ok")
 }
 
 func (s *Server) adminMutate(w http.ResponseWriter, r *http.Request, notice string, fn func(*config.Config) error) {
@@ -326,11 +442,11 @@ func (s *Server) adminMutate(w http.ResponseWriter, r *http.Request, notice stri
 		return
 	}
 	if err := s.UpdateConfig(fn); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.adminHome(w, r, err.Error(), "bad")
 		return
 	}
 	s.audit("admin_config", "admin")
-	s.adminHome(w, r, notice)
+	s.adminHome(w, r, notice, "ok")
 }
 
 func (s *Server) adminBind(w http.ResponseWriter, r *http.Request) {
@@ -339,7 +455,7 @@ func (s *Server) adminBind(w http.ResponseWriter, r *http.Request) {
 		if ip, err := netip.ParseAddr(host); err == nil {
 			c.Approver.BindIP = ip.String()
 			c.Approver.BindHost = ""
-		} else {
+		} else if host != "" {
 			c.Approver.BindHost = host
 			c.Approver.BindIP = ""
 		}
@@ -350,7 +466,9 @@ func (s *Server) adminBind(w http.ResponseWriter, r *http.Request) {
 			}
 			c.Approver.Port = n
 		}
-		c.Approver.PublicHost = strings.TrimSpace(r.PostForm.Get("public_host"))
+		if h := strings.TrimSpace(r.PostForm.Get("public_host")); h != "" {
+			c.Approver.PublicHost = h
+		}
 		if listen := strings.TrimSpace(r.PostForm.Get("agent_listen")); listen != "" {
 			c.Agent.Listen = listen
 		}
@@ -386,25 +504,25 @@ func (s *Server) adminNtfyTest(w http.ResponseWriter, r *http.Request) {
 	cfg := s.Config()
 	n, err := notify.FromConfig(cfg.Ntfy.URL, cfg.Ntfy.OwnDomain, cfg.Ntfy.Topic, cfg.Ntfy.Token)
 	if err != nil {
-		s.adminHome(w, r, "Notification check failed: "+err.Error())
+		s.adminHome(w, r, "Notification check failed: "+err.Error(), "bad")
 		return
 	}
 	if n == nil {
-		s.adminHome(w, r, "No ntfy is configured, so there is nothing to test.")
+		s.adminHome(w, r, "No ntfy is configured, so there is nothing to test.", "warn")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	if err := n.RequireAuth(ctx); err != nil {
-		s.adminHome(w, r, "Notification check failed: "+err.Error())
+		s.adminHome(w, r, "Notification check failed: "+err.Error(), "bad")
 		return
 	}
 	if err := n.Send(ctx, notify.Message{Title: "bw2fabroker test", Body: "The broker reached this topic with its bearer token. No action needed.", Priority: 3, Tags: []string{"bell"}}); err != nil {
-		s.adminHome(w, r, "Test push failed: "+err.Error())
+		s.adminHome(w, r, "Test push failed: "+err.Error(), "bad")
 		return
 	}
 	s.audit("ntfy_test", "admin")
-	s.adminHome(w, r, "Test notification sent: anonymous publish and read are refused, the bearer token was accepted, and one push was delivered.")
+	s.adminHome(w, r, "Test notification sent: anonymous publish and read are refused, the bearer token was accepted, and one push was delivered.", "ok")
 }
 
 func (s *Server) adminAgentAdd(w http.ResponseWriter, r *http.Request) {
@@ -440,12 +558,11 @@ func (s *Server) adminAgentAdd(w http.ResponseWriter, r *http.Request) {
 		c.Agents[name] = config.Agent{TokenSHA256: hash, Created: time.Now().UTC()}
 		return c.Validate()
 	}); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.adminHome(w, r, err.Error(), "bad")
 		return
 	}
 	s.audit("admin_agent_add", "admin")
-	cfg := s.Config()
-	v := adminView{Notice: "Agent added.", Secret: token, Agents: cfg.AgentNames()}
+	v := adminView{Notice: "Agent added. Copy its token now.", NoticeKind: "ok", Secret: token, Version: s.Version}
 	s.fill(r, &v)
 	s.adminRender(w, r, v)
 }
@@ -505,11 +622,11 @@ func (s *Server) admin2FAEnroll(w http.ResponseWriter, r *http.Request) {
 		c.TwoFA.Secret = secret
 		return c.Validate()
 	}); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.adminHome(w, r, err.Error(), "bad")
 		return
 	}
 	s.audit("admin_2fa_enroll", "admin")
-	v := adminView{Notice: "Authenticator secret replaced. Add the address below before leaving this page.", Secret: url}
+	v := adminView{Notice: "Authenticator secret replaced. Add the address below before leaving this page.", NoticeKind: "ok", Secret: url, Version: s.Version}
 	s.fill(r, &v)
 	s.adminRender(w, r, v)
 }
@@ -521,11 +638,11 @@ func (s *Server) adminPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	pw := r.PostForm.Get("password")
 	if pw != r.PostForm.Get("again") {
-		s.adminHome(w, r, "The two passwords do not match.")
+		s.adminHome(w, r, "The two passwords do not match.", "bad")
 		return
 	}
 	if len([]rune(pw)) < auth.MinPasswordLen {
-		s.adminHome(w, r, "The approval password is too short.")
+		s.adminHome(w, r, "The approval password is too short.", "bad")
 		return
 	}
 	hash, err := auth.HashPassword(pw)
@@ -537,11 +654,11 @@ func (s *Server) adminPassword(w http.ResponseWriter, r *http.Request) {
 		c.ApprovalPassword = hash
 		return nil
 	}); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.adminHome(w, r, err.Error(), "bad")
 		return
 	}
 	s.audit("admin_password", "admin")
-	s.adminHome(w, r, "Approval password changed.")
+	s.adminHome(w, r, "Approval password changed.", "ok")
 }
 
 func (s *Server) adminRotateToken(w http.ResponseWriter, r *http.Request) {
@@ -565,12 +682,12 @@ func (s *Server) adminRotateToken(w http.ResponseWriter, r *http.Request) {
 		c.Admin.TokenSHA256 = hash
 		return c.Validate()
 	}); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.adminHome(w, r, err.Error(), "bad")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "broker_admin", Value: token, Path: "/admin", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: "broker_admin", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	s.audit("admin_token_rotated", "admin")
-	v := adminView{Notice: "Admin token replaced. The old token no longer works.", Secret: token}
+	v := adminView{Notice: "Admin token replaced. The old token no longer works.", NoticeKind: "ok", Secret: token, Version: s.Version}
 	s.fill(r, &v)
 	s.adminRender(w, r, v)
 }
@@ -582,12 +699,13 @@ func (s *Server) adminResume(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimSpace(r.PostForm.Get("name"))
 	if _, ok := s.Config().Agents[name]; !ok {
-		http.Error(w, "no such agent", http.StatusBadRequest)
+		s.adminHome(w, r, "There is no agent with that name.", "bad")
 		return
 	}
 	s.Resume(name)
-	s.adminHome(w, r, "Agent resumed.")
+	s.adminHome(w, r, "Agent resumed.", "ok")
 }
+
 func (s *Server) adminVault(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
@@ -595,7 +713,7 @@ func (s *Server) adminVault(w http.ResponseWriter, r *http.Request) {
 	}
 	raw := strings.TrimSpace(r.PostForm.Get("server"))
 	if err := config.ValidVaultServer(raw); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.adminHome(w, r, err.Error(), "bad")
 		return
 	}
 	if raw != "" {
@@ -603,7 +721,7 @@ func (s *Server) adminVault(w http.ResponseWriter, r *http.Request) {
 			SetServer(ctx context.Context, rawURL string) error
 		}); ok {
 			if err := v.SetServer(r.Context(), raw); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				s.adminHome(w, r, err.Error(), "bad")
 				return
 			}
 		}
@@ -642,6 +760,7 @@ func (s *Server) fill(r *http.Request, v *adminView) {
 			})
 		}
 	}
+	v.Health = s.Health(r.Context())
 	_ = r
 }
 

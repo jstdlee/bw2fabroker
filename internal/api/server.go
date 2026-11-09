@@ -20,6 +20,7 @@ import (
 	"github.com/jstdlee/bw2fabroker/internal/contract"
 	"github.com/jstdlee/bw2fabroker/internal/notify"
 	"github.com/jstdlee/bw2fabroker/internal/pending"
+	"github.com/jstdlee/bw2fabroker/internal/tailscale"
 	"github.com/jstdlee/bw2fabroker/internal/vault"
 )
 
@@ -47,6 +48,8 @@ type Server struct {
 	Now      func() time.Time
 	Expiry   time.Duration
 	Hold     time.Duration
+	// Version is shown on the pages. It is the broker's build version.
+	Version string
 
 	// AllowLoopback lets 127.0.0.1 and ::1 open the approval page. Only `broker demo`
 	AllowLoopback bool
@@ -58,6 +61,10 @@ type Server struct {
 
 	allowLAN atomic.Bool
 	bindMode atomic.Value
+	// Tailscale reports the state of the private network. It may be nil.
+	Tailscale tailscale.Checker
+	// ntfyLast remembers the last push, for the admin panel.
+	ntfyLast atomic.Pointer[ntfyState]
 
 	linkBase        atomic.Value // string, e.g. http://100.x.y.z:8787; empty when the approver side is down
 	approvalMu      sync.Mutex
@@ -232,7 +239,10 @@ func (s *Server) push(m notify.Message) {
 		defer cancel()
 		if err := s.Notifier.Send(ctx, m); err != nil {
 			s.Log.Warn("ntfy send failed", slog.String("error", err.Error()))
+			s.noteNtfy(false, m.Title, err)
+			return
 		}
+		s.noteNtfy(true, m.Title, nil)
 	}()
 }
 
@@ -275,6 +285,10 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		s.audit("unauthorized", "", slog.String("remote", r.RemoteAddr))
 		contract.Write(w, contract.Rejected("", contract.CodeUnauthorized))
+		return
+	}
+	if r.URL.Path == "/mcp" {
+		s.serveMCP(w, r, agent)
 		return
 	}
 	if r.URL.RawQuery != "" && !(r.Method == http.MethodGet && r.URL.Path == "/v1/search" && len(r.URL.Query()) == 1 && r.URL.Query().Get("q") != "") {
@@ -380,13 +394,14 @@ func (s *Server) create(ctx context.Context, agent string, r *http.Request) cont
 	nctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	err = s.Notifier.Send(nctx, notify.Message{
-		Title:    "Approve secret for " + agent,
-		Body:     agent + " wants " + item.Name + " / " + field.String() + ". Expires in " + s.Expiry.String() + ".",
+		Title:    "Approve: " + item.Name + " / " + field.String(),
+		Body:     agent + " wants the " + field.String() + " field of " + item.Name + ".\nReason: " + req.Reason + "\nExpires in " + s.Expiry.String() + ".",
 		Click:    link,
 		Priority: 5,
-		Tags:     []string{"key"},
-		Actions:  []notify.Action{{Action: "view", Label: "Approve", URL: link}},
+		Tags:     []string{"key", "hourglass"},
+		Actions:  []notify.Action{{Action: "view", Label: "Review request", URL: link}},
 	})
+	s.noteNtfy(err == nil, "Approve: "+item.Name+" / "+field.String(), err)
 	if err != nil {
 		s.Store.Remove(id)
 		s.Log.Warn("ntfy send failed", slog.String("error", err.Error()))

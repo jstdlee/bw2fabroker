@@ -90,6 +90,9 @@ error, stop, and tell the user.
 - `BROKER_TOKEN` (or `BROKER_TOKEN_FILE`) holds your agent token. Never print it or pass it to other
   tools; `broker-get --env` already keeps it from the command it runs.
 - `BROKER_URL` is the agent HTTP API, for example `http://100.x.y.z:8786`.
+- `broker-get` also reads a `.env` in the working directory for those two names. That file holds the
+  agent's own address and token, not a vault value. Do not read it for anything else, and never
+  print it.
 
 If either is missing, tell the user. Do not search for a token.
 
