@@ -59,7 +59,18 @@ const (
 // localClient trusts the test's own loopback certificate. It is not used for any other host.
 var localClient = &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
 
-func TestDisposableVault(t *testing.T) {
+// e2eEnv is the shared disposable-vault harness. TestDisposableVault pins the
+// HTTP contract; TestAgentOneLiner pins the agent command surface on top of it.
+type e2eEnv struct {
+	Dir    string
+	App    string
+	Tok    string
+	Srv    *api.Server
+	Notes  *capNotify
+	LogBuf *bytes.Buffer
+}
+
+func startE2E(t *testing.T) *e2eEnv {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Fatal(err)
 	}
@@ -203,14 +214,20 @@ func TestDisposableVault(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.Audit = alog
+	return &e2eEnv{Dir: dir, App: app, Tok: tok, Srv: srv, Notes: notes, LogBuf: &logBuf}
+}
+
+func TestDisposableVault(t *testing.T) {
+	env := startE2E(t)
+	srv, tok := env.Srv, env.Tok
 
 	pending := agentCall(t, srv, tok, http.MethodPost, "/v1/requests", `{"item":"`+e2eItem+`","field":"password","reason":"e2e ask path"}`)
 	if pending.Status != contract.StatusPending || pending.RequestID == nil {
 		t.Fatalf("want pending, got %+v", pending)
 	}
-	notes.mu.Lock()
-	click := notes.click
-	notes.mu.Unlock()
+	env.Notes.mu.Lock()
+	click := env.Notes.click
+	env.Notes.mu.Unlock()
 	u, err := url.Parse(click)
 	if err != nil || u.Path == "" {
 		t.Fatalf("approval link: %q", click)
@@ -246,11 +263,51 @@ func TestDisposableVault(t *testing.T) {
 		t.Fatalf("identity: %+v", ident)
 	}
 
-	logged, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	// MCP over /mcp pins the tools/call surface agents mount. The standard
+	// "arguments" key and the legacy "args" key some clients send must both
+	// flow to the tool, and bad arguments must say what is wrong instead of
+	// failing with one opaque line.
+	text, isErr := mcpCall(t, srv, tok, "arguments", "mcp arguments key")
+	if isErr {
+		t.Fatalf("arguments key rejected: %s", text)
+	}
+	var viaArguments contract.Response
+	if err := json.Unmarshal([]byte(text), &viaArguments); err != nil || viaArguments.Valid() != nil {
+		t.Fatalf("arguments key text %q: %v", text, err)
+	}
+	if viaArguments.Status != contract.StatusApproved || viaArguments.Code == nil ||
+		*viaArguments.Code != contract.CodeAuto || viaArguments.Value == nil || *viaArguments.Value != e2eCustom {
+		t.Fatalf("mcp via arguments: %+v", viaArguments)
+	}
+	legacyText, legacyErr := mcpCall(t, srv, tok, "args", "mcp args key")
+	if legacyErr {
+		t.Fatalf("args key rejected: %s", legacyText)
+	}
+	var viaArgs contract.Response
+	if err := json.Unmarshal([]byte(legacyText), &viaArgs); err != nil || viaArgs.Value == nil || *viaArgs.Value != e2eCustom {
+		t.Fatalf("mcp via args: %q %v", legacyText, err)
+	}
+	missingText, missingErr := mcpCall(t, srv, tok, "arguments", "")
+	if !missingErr || !strings.Contains(missingText, "reason is required") {
+		t.Fatalf("missing reason: %q (isError %v)", missingText, missingErr)
+	}
+	noKeyText, noKeyErr := mcpCall(t, srv, tok, "unknown-key", "mcp unknown key")
+	if !noKeyErr || !strings.Contains(noKeyText, "invalid arguments") {
+		t.Fatalf("unknown args key: %q (isError %v)", noKeyText, noKeyErr)
+	}
+
+	assertNoSecretLeak(t, env)
+}
+
+// assertNoSecretLeak fails the test if any known vault secret reached the audit
+// file or the server log, including values delivered through the agent flows.
+func assertNoSecretLeak(t *testing.T, env *e2eEnv) {
+	t.Helper()
+	logged, err := os.ReadFile(filepath.Join(env.Dir, "audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob := string(logged) + logBuf.String()
+	blob := string(logged) + env.LogBuf.String()
 	for _, secret := range []string{e2eSecret, e2ePassword, e2eApprove, e2eNote, e2eCustom, e2eCard, e2eMail, e2eFileBody} {
 		if strings.Contains(blob, secret) {
 			t.Fatalf("audit or log contains %q", secret)
