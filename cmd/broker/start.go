@@ -214,6 +214,7 @@ func cmdStart(args []string) error {
 
 	go manageApprover(ctx, srv, holder, ts, log)
 	go syncLoop(ctx, bw, log)
+	go srv.RequestCleaner(ctx)
 	if mode == "lan" {
 		go push(notify.Message{Title: "bw2fabroker is on the LAN", Body: "The approval page is bound to " + addr.String() + ". Any device on this network can open it. Approval still requires the approval password.", Priority: 4, Tags: []string{"warning"}})
 	}

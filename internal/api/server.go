@@ -28,6 +28,7 @@ import (
 const (
 	DefaultExpiry        = 120 * time.Second
 	DefaultHold          = 50 * time.Second
+	ForceCleanEvery      = 4 * time.Hour
 	MaxPasswordErrors    = 3
 	GlobalPasswordErrors = 10
 	GlobalPasswordWindow = time.Hour
@@ -48,6 +49,8 @@ type Server struct {
 	Now      func() time.Time
 	Expiry   time.Duration
 	Hold     time.Duration
+	// ForceCleanEvery is how often the request store is force cleaned (4h).
+	ForceCleanEvery time.Duration
 	// Version is shown on the pages. It is the broker's build version.
 	Version string
 
@@ -80,7 +83,7 @@ type Server struct {
 // New builds a server.
 func New(cfg func() *config.Config, v vault.Vault, n notify.Notifier, l *auth.Linker, log *slog.Logger) *Server {
 	s := &Server{Config: cfg, Vault: v, Notifier: n, Linker: l, Log: log, Now: time.Now,
-		Expiry: DefaultExpiry, Hold: DefaultHold,
+		Expiry: DefaultExpiry, Hold: DefaultHold, ForceCleanEvery: ForceCleanEvery,
 		denials: map[string][]time.Time{}, requests: map[string][]time.Time{}, suspended: map[string]bool{}}
 	s.linkBase.Store("")
 	s.bindMode.Store("")
@@ -119,6 +122,22 @@ func (s *Server) audit(event, agent string, attrs ...slog.Attr) {
 	}
 	if s.Audit != nil {
 		s.Audit.Add(ev)
+	}
+}
+
+// RequestCleaner force cleans the request store on s.ForceCleanEvery. A restart already forgets
+// every request, and the per-request timers normally erase each one, so this is the backstop for
+// anything that lost its timer, such as a stuck approval read.
+func (s *Server) RequestCleaner(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(s.ForceCleanEvery):
+			if n := s.Store.ForceClean(); n > 0 {
+				s.audit("force_cleaned", "", slog.Int("requests", n))
+			}
+		}
 	}
 }
 
