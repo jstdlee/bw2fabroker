@@ -272,6 +272,9 @@ func (s *Store) ForceClean() int {
 }
 
 // Wait holds up to hold for a final result. An approved value is handed out once and then erased.
+// If the hold ends at or after the request's expiry, the request is expired here instead of being
+// reported as pending: nobody can approve a request whose link is dead, so telling the caller to
+// keep waiting would invite a poll against a request that can never finish.
 func (s *Store) Wait(ctx context.Context, id, agent string, hold time.Duration) contract.Response {
 	s.mu.Lock()
 	r, ok := s.reqs[id]
@@ -291,22 +294,35 @@ func (s *Store) Wait(ctx context.Context, id, agent string, hold time.Duration) 
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	cur, ok := s.reqs[id]
 	if !ok || cur != r {
+		s.mu.Unlock()
 		return contract.Denied(id, contract.CodeUnknownRequest)
 	}
 	if r.state != stateFinal {
-		return contract.Pending(id)
+		if s.now().Before(r.Expires) {
+			s.mu.Unlock()
+			return contract.Pending(id)
+		}
+		resp := contract.Denied(r.ID, contract.CodeExpired)
+		s.finishLocked(r, resp, "")
+		s.mu.Unlock()
+		if s.onExpire != nil {
+			s.onExpire(r)
+		}
+		return resp
 	}
 	if r.final.Status == contract.StatusApproved {
 		resp := r.final
 		r.value = ""
 		r.final = contract.Response{}
 		delete(s.reqs, id)
+		s.mu.Unlock()
 		return resp
 	}
-	return r.final
+	resp := r.final
+	s.mu.Unlock()
+	return resp
 }
 
 // Open returns the requests still waiting for a person, soonest to expire first.
