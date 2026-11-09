@@ -115,7 +115,8 @@ form.row button { padding: .3rem .7rem; margin-left: .3rem; }
 <label for="ntfy_token">Bearer token</label>
 <input id="ntfy_token" name="token" type="password" placeholder="leave blank to keep the current token" autocomplete="off">
 <p><button type="submit">Save notifications</button></p>
-</form></section>
+</form>
+<form method="post" action="/admin/ntfy/test"><button type="submit">Send a test notification</button></form></section>
 <section><h2>Waiting for approval</h2>
 {{if .Pending}}<ul>{{range .Pending}}<li><a href="{{.Link}}">{{.Item}} / {{.Field}}</a> for {{.Agent}} — {{.Reason}} (expires {{.Expires.Format "15:04:05"}})</li>{{end}}</ul>
 {{else}}<p>No request is waiting.</p>{{end}}</section>
@@ -213,6 +214,8 @@ func (s *Server) AdminHandler() http.Handler {
 			s.adminBind(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/admin/ntfy":
 			s.adminNtfy(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/admin/ntfy/test":
+			s.adminNtfyTest(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/admin/agent/add":
 			s.adminAgentAdd(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/admin/agent/remove":
@@ -375,6 +378,33 @@ func (s *Server) adminNtfy(w http.ResponseWriter, r *http.Request) {
 		}
 		return c.Validate()
 	})
+}
+
+// adminNtfyTest runs the same probes as startup and then sends one real push, so the operator
+// sees both the access check and the delivery in one place.
+func (s *Server) adminNtfyTest(w http.ResponseWriter, r *http.Request) {
+	cfg := s.Config()
+	n, err := notify.FromConfig(cfg.Ntfy.URL, cfg.Ntfy.OwnDomain, cfg.Ntfy.Topic, cfg.Ntfy.Token)
+	if err != nil {
+		s.adminHome(w, r, "Notification check failed: "+err.Error())
+		return
+	}
+	if n == nil {
+		s.adminHome(w, r, "No ntfy is configured, so there is nothing to test.")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	if err := n.RequireAuth(ctx); err != nil {
+		s.adminHome(w, r, "Notification check failed: "+err.Error())
+		return
+	}
+	if err := n.Send(ctx, notify.Message{Title: "bw2fabroker test", Body: "The broker reached this topic with its bearer token. No action needed.", Priority: 3, Tags: []string{"bell"}}); err != nil {
+		s.adminHome(w, r, "Test push failed: "+err.Error())
+		return
+	}
+	s.audit("ntfy_test", "admin")
+	s.adminHome(w, r, "Test notification sent: anonymous publish and read are refused, the bearer token was accepted, and one push was delivered.")
 }
 
 func (s *Server) adminAgentAdd(w http.ResponseWriter, r *http.Request) {

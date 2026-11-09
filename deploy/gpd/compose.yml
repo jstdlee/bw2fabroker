@@ -1,0 +1,28 @@
+# gpd deployment: host networking, so the broker binds gpd's tailnet address
+# (100.122.160.125) and reuses the host tailscaled. No second tailnet node, no TS_AUTHKEY.
+# The panel stays on loopback: http://127.0.0.1:8788/admin
+name: bw2fabroker
+
+services:
+  broker:
+    image: bw2fabroker:local
+    container_name: bw2fabroker
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      BROKER_CONFIG: /data/config/config.toml
+      BITWARDENCLI_APPDATA_DIR: /data/bw
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+    volumes:
+      - broker-data:/data
+      - /var/run/tailscale:/var/run/tailscale:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+volumes:
+  broker-data:
