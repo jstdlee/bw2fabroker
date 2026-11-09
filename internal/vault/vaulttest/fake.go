@@ -130,15 +130,3 @@ func (f *Fake) Search(_ context.Context, query string) ([]vault.CatalogItem, err
 func (f *Fake) List(ctx context.Context) ([]vault.CatalogItem, error) {
 	return f.Search(ctx, "")
 }
-
-func (f *Fake) Exec(_ context.Context, args []string) (string, string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(args) == 0 {
-		return "", "bw needs arguments", vault.ErrLocked
-	}
-	if args[0] != "status" && f.Locked {
-		return "", "locked", vault.ErrLocked
-	}
-	return "ok " + strings.Join(args, " "), "", nil
-}

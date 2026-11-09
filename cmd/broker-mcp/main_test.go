@@ -11,10 +11,12 @@ import (
 
 	"github.com/jstdlee/bw2fabroker/internal/agentapi"
 	"github.com/jstdlee/bw2fabroker/internal/contract"
+	"github.com/jstdlee/bw2fabroker/internal/mcpserver"
 )
 
-func TestServe(t *testing.T) {
-	secret := "s3cr3t-value"
+// broker returns a test broker that answers the agent API.
+func broker(t *testing.T, secret string) *httptest.Server {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer bwb_test" {
 			contract.Write(w, contract.Rejected("", contract.CodeUnauthorized))
@@ -35,13 +37,26 @@ func TestServe(t *testing.T) {
 			contract.Write(w, contract.Rejected("", contract.CodeBadRequest))
 		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// client returns a broker client for the test broker.
+func client(t *testing.T, srv *httptest.Server) *agentapi.Client {
+	t.Helper()
 	t.Setenv("BROKER_URL", srv.URL)
 	t.Setenv("BROKER_TOKEN", "bwb_test")
 	c, err := agentapi.FromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
+	return c
+}
+
+func TestServe(t *testing.T) {
+	secret := "s3cr3t-value"
+	srv := broker(t, secret)
+	c := client(t, srv)
 	in := strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
@@ -53,7 +68,7 @@ func TestServe(t *testing.T) {
 		`{"jsonrpc":"2.0","id":7,"method":"nope"}`,
 	}, "\n") + "\n"
 	var out bytes.Buffer
-	if err := serve(strings.NewReader(in), &out, c); err != nil {
+	if err := mcpserver.New(c, "test").ServeStdio(t.Context(), strings.NewReader(in), &out); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
@@ -90,5 +105,145 @@ func TestServe(t *testing.T) {
 	}
 	if !strings.Contains(lines[6], "method not found") {
 		t.Fatalf("unknown method: %s", lines[6])
+	}
+}
+
+func TestServeBrokerStatus(t *testing.T) {
+	secret := "s3cr3t-value"
+	srv := broker(t, secret)
+	c := client(t, srv)
+	in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"broker_status","arguments":{}}}` + "\n"
+	var out bytes.Buffer
+	if err := mcpserver.New(c, "test").ServeStdio(t.Context(), strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Result.Content) != 1 {
+		t.Fatalf("content: %s", out.String())
+	}
+	text := got.Result.Content[0].Text
+	if strings.Contains(text, secret) {
+		t.Fatalf("status leaked a value: %s", text)
+	}
+	var report struct {
+		URL       string `json:"url"`
+		Reachable bool   `json:"reachable"`
+		Items     int    `json:"items"`
+		Error     string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(text), &report); err != nil {
+		t.Fatalf("report %q: %v", text, err)
+	}
+	if !report.Reachable || report.Items != 1 || report.Error != "" {
+		t.Fatalf("report: %+v", report)
+	}
+}
+
+// textOf returns the text a resource or prompt response carries.
+func textOf(t *testing.T, line string) string {
+	t.Helper()
+	var got struct {
+		Result struct {
+			Contents []struct {
+				Text string `json:"text"`
+			} `json:"contents"`
+			Messages []struct {
+				Content struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"messages"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(line), &got); err != nil {
+		t.Fatalf("line %q: %v", line, err)
+	}
+	if len(got.Result.Contents) > 0 {
+		return got.Result.Contents[0].Text
+	}
+	if len(got.Result.Messages) > 0 {
+		return got.Result.Messages[0].Content.Text
+	}
+	return ""
+}
+
+func TestServeNewResourcesAndPrompt(t *testing.T) {
+	srv := broker(t, "s3cr3t-value")
+	c := client(t, srv)
+	in := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"broker://setup"}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"broker://fields"}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"broker://policy"}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"prompts/get","params":{"name":"setup-mcp"}}`,
+	}, "\n") + "\n"
+	var out bytes.Buffer
+	if err := mcpserver.New(c, "test").ServeStdio(t.Context(), strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("responses: %d\n%s", len(lines), out.String())
+	}
+	for i, want := range []string{"mcpServers", "attachment:<file>", "denied and rejected are final", "request_field"} {
+		if !strings.Contains(textOf(t, lines[i]), want) {
+			t.Fatalf("line %d misses %q: %s", i, want, lines[i])
+		}
+	}
+}
+
+func TestRunVersion(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--version"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("code: %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "broker-mcp") {
+		t.Fatalf("stdout: %q", stdout.String())
+	}
+}
+
+func TestRunHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--help"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("code: %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "usage: broker-mcp") {
+		t.Fatalf("stderr: %q", stderr.String())
+	}
+}
+
+func TestRunMissingEnvironment(t *testing.T) {
+	t.Setenv("BROKER_URL", "")
+	t.Setenv("BROKER_TOKEN", "")
+	t.Setenv("BROKER_TOKEN_FILE", "")
+	var stdout, stderr bytes.Buffer
+	if code := run(nil, strings.NewReader(""), &stdout, &stderr); code != 2 {
+		t.Fatalf("code: %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "BROKER_TOKEN") {
+		t.Fatalf("stderr: %q", stderr.String())
+	}
+}
+
+func TestRunEndOfInput(t *testing.T) {
+	srv := broker(t, "s3cr3t-value")
+	client(t, srv)
+	var stdout, stderr bytes.Buffer
+	if code := run(nil, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("code: %d, stderr: %s", code, stderr.String())
+	}
+}
+
+func TestRunUnexpectedArgument(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"extra"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
+		t.Fatalf("code: %d, stderr: %s", code, stderr.String())
 	}
 }

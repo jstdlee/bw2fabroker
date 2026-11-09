@@ -14,43 +14,67 @@ import (
 	"github.com/jstdlee/bw2fabroker/internal/pending"
 )
 
+// pageCSS is the phone look of the approval page: the same tokens as the panel, with
+// larger type and 48 px buttons.
+const pageCSS = `
+:root {
+  color-scheme: light dark;
+  --bg: #f4f4f6; --card: #ffffff; --line: #e3e3e8; --divider: #ececf0;
+  --fg: #212126; --dim: #737379; --track: #f1f1f4; --accent: #007aff; --bad: #d70015;
+  font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1f; --card: #252528; --line: #303034; --divider: #2c2c30;
+    --fg: #e8e8ec; --dim: #8e8e96; --track: #2e2e33; --accent: #0a84ff; --bad: #ff453a;
+  }
+}
+@media (prefers-contrast: more) { :root { --dim: #5c5c63; --line: #b9b9c0; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+main { max-width: 26rem; margin: 0 auto; padding: 18px 16px 40px; }
+.wordmark { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+h1 { font-size: 22px; font-weight: 600; letter-spacing: -.015em; margin: 5px 0 14px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 2px 14px; margin: 0 0 12px; }
+.row { display: flex; gap: 12px; padding: 10px 0; border-top: 1px solid var(--divider); }
+.row:first-child { border-top: 0; }
+.k { flex: 0 0 5.6rem; color: var(--dim); font-size: 13px; padding-top: 1px; }
+.v { margin: 0; font-size: 14.5px; overflow-wrap: anywhere; }
+.v .id { display: block; color: var(--dim); font-size: 11.5px; margin-top: 2px; }
+.reason { display: block; background: var(--track); border-radius: 8px; padding: 8px 10px; }
+.demo { background: #fff6e0; color: #6b4b00; border-radius: 10px; padding: 10px 12px; font-size: 13px; margin: 0 0 12px; }
+.status { font-size: 15px; margin: 0 0 12px; }
+label { display: block; font-size: 12.5px; color: var(--dim); margin: 0 0 5px; }
+input { width: 100%; font: inherit; font-size: 17px; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--track); color: var(--fg); min-height: 46px; }
+input:focus { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; border-color: var(--accent); }
+button { font: inherit; font-weight: 600; font-size: 16px; width: 100%; min-height: 48px; border-radius: 10px; border: 0; margin-top: 8px; cursor: default; user-select: none; }
+.approve { background: var(--accent); color: #fff; }
+.approve:active { background: color-mix(in srgb, var(--accent) 88%, #000); }
+.deny { background: transparent; color: var(--bad); }
+.small { color: var(--dim); font-size: 12.5px; margin: 12px 0 0; }
+@media (prefers-color-scheme: dark) { .demo { background: #33290f; color: #f0d493; } }
+@media (prefers-reduced-motion: reduce) { button:active { background: none; } }
+`
+
 var page = template.Must(template.New("page").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>bw2fabroker</title>
-<style>
-:root{color-scheme:light;--bg:#f5f5f7;--card:#fff;--fg:#1d1d1f;--muted:#6e6e73;--line:rgba(0,0,0,.08);--blue:#0071e3;--red:#d70015}
-body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.47 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
-main{max-width:28rem;margin:0 auto;padding:1.5rem 1rem 3rem}
-h1{font-size:1.7rem;font-weight:700;letter-spacing:-.022em;line-height:1.15;margin:0 0 1rem}
-.card{background:var(--card);border-radius:18px;box-shadow:0 1px 2px rgba(0,0,0,.04),0 12px 32px rgba(0,0,0,.06);padding:1rem 1rem .4rem;margin:0 0 1rem}
-dl{display:grid;grid-template-columns:5.5rem 1fr;gap:.55rem .75rem;margin:0}
-dt{color:var(--muted);font-size:.82rem;padding-top:.15rem}dd{margin:0;overflow-wrap:anywhere}
-.reason{background:#f5f5f7;border-radius:12px;padding:.55rem .7rem}
-.small{color:var(--muted);font-size:.82rem}
-label{display:block;font-size:.82rem;font-weight:600;margin:.2rem 0 .3rem}
-input{width:100%;box-sizing:border-box;font:inherit;font-size:1.05rem;padding:.75rem .8rem;margin:0 0 .8rem;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--fg)}
-input:focus{outline:2px solid #b3d7ff;border-color:var(--blue)}
-button{font:inherit;font-weight:600;font-size:1.05rem;padding:.85rem;border-radius:980px;border:0;width:100%;margin-bottom:.6rem}
-button:active{transform:scale(.97)}
-.approve{background:var(--blue);color:#fff}.deny{background:#e8e8ed;color:var(--red)}
-.status{font-size:1.15rem;font-weight:650;letter-spacing:-.01em}
-.demo{background:#fff8e8;border-radius:12px;padding:.7rem .8rem;margin:0 0 .9rem}
-@media (prefers-reduced-motion:reduce){button:active{transform:none}}
-</style></head><body><main>
+<style>` + pageCSS + `</style></head><body><main>
 {{if .Pending}}
+<div class="wordmark">bw2fabroker</div>
 <h1>Approve one secret?</h1>
 {{if .Demo}}<p class="demo">Demo on this machine. Not your Bitwarden vault. Use the approval password printed when <code>broker demo</code> started.</p>{{end}}
-<div class="card"><dl>
-<dt>Agent</dt><dd>{{.Agent}}</dd>
-<dt>Item</dt><dd>{{.ItemName}}</dd>
-<dt>Item id</dt><dd><code>{{.ItemID}}</code></dd>
-<dt>Folder</dt><dd>{{if .Folder}}{{.Folder}}{{else}}(none){{end}}</dd>
-<dt>Field</dt><dd><strong>{{.Field}}</strong>{{if .IsTOTP}} — a second factor{{end}}</dd>
-<dt>Reason</dt><dd class="reason">{{.Reason}}<br><span class="small">the agent's own words</span></dd>
-<dt>Expires</dt><dd>in {{.SecondsLeft}} s</dd>
-</dl></div>
+<div class="card">
+<div class="row"><span class="k">Agent</span><p class="v">{{.Agent}}</p></div>
+<div class="row"><span class="k">Item</span><p class="v">{{.ItemName}}<span class="id">{{.ItemID}}</span></p></div>
+<div class="row"><span class="k">Field</span><p class="v"><strong>{{.Field}}</strong>{{if .IsTOTP}} · a second factor{{end}}</p></div>
+<div class="row"><span class="k">Folder</span><p class="v">{{if .Folder}}{{.Folder}}{{else}}none{{end}}</p></div>
+<div class="row"><span class="k">Reason</span><p class="v"><span class="reason">{{.Reason}}</span></p></div>
+<div class="row"><span class="k">Expires</span><p class="v">in {{.SecondsLeft}} seconds</p></div>
+</div>
 {{if .Message}}<p class="status">{{.Message}}</p>{{end}}
 <form method="post" action="{{.Base}}/approve" autocomplete="off">
 <label for="pw">Approval password</label>
@@ -60,9 +84,10 @@ button:active{transform:scale(.97)}
 <button class="approve" type="submit">Approve</button>
 </form>
 <form method="post" action="{{.Base}}/deny"><button class="deny" type="submit">Deny</button></form>
-<p class="small">Never type your Bitwarden master password here.</p>
+<p class="small">This password releases this one field only. It is not your Bitwarden master password.</p>
 {{else}}
-<h1>bw2fabroker</h1>
+<div class="wordmark">bw2fabroker</div>
+<h1>{{.Title}}</h1>
 <p class="status">{{.Message}}</p>
 {{end}}
 </main></body></html>`))
@@ -70,7 +95,7 @@ button:active{transform:scale(.97)}
 type pageData struct {
 	Pending                                bool
 	Agent, ItemName, ItemID, Folder, Field string
-	Reason, Base, Message                  string
+	Reason, Base, Message, Title           string
 	IsTOTP, Demo, Need2FA                  bool
 	SecondsLeft                            int
 }
@@ -88,7 +113,7 @@ func (s *Server) render(w http.ResponseWriter, status int, d pageData) {
 }
 
 func (s *Server) message(w http.ResponseWriter, status int, msg string) {
-	s.render(w, status, pageData{Message: msg})
+	s.render(w, status, pageData{Title: "bw2fabroker", Message: msg})
 }
 
 // ApproverHandler serves /a only. It answers only callers with a tailnet address.
