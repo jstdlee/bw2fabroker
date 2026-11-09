@@ -40,14 +40,22 @@ func cmdDoctor() error {
 		warn("running as root; run the broker as its own user (app mode) or in its container (Docker mode)")
 	}
 
-	if _, err := notify.New(cfg.Ntfy.URL, cfg.Ntfy.OwnDomain, cfg.Ntfy.Topic, cfg.Ntfy.Token); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	n, err := notify.FromConfig(cfg.Ntfy.URL, cfg.Ntfy.OwnDomain, cfg.Ntfy.Topic, cfg.Ntfy.Token)
+	if err != nil {
 		bad("ntfy: " + err.Error())
+	} else if n == nil {
+		warn("ntfy is not configured; approval links go to the log and the admin panel")
 	} else {
 		ok("ntfy " + cfg.Ntfy.URL + " is https on the own domain " + cfg.Ntfy.OwnDomain)
+		if err := n.RequireAuth(ctx); err != nil {
+			bad("ntfy: " + err.Error())
+		} else {
+			ok("ntfy topic " + cfg.Ntfy.Topic + " rejects anonymous publish and read, and accepts the bearer token")
+		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	st, err := tailscale.Preflight(ctx, tailscale.NewLocalAPI(cfg.Tailscale.Socket))
 	if err != nil {
 		bad("tailscale: " + err.Error())

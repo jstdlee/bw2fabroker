@@ -25,7 +25,9 @@ The admin page and the approval page below are the real pages. The phone, the no
 ## What you need
 
 - Tailscale on the broker host and on your phone. The broker checks that Tailscale is installed and connected when the approval page binds a tailnet address.
-- A self-hosted ntfy server on your own domain, with HTTPS. The broker refuses `ntfy.sh`, any other domain, plain HTTP, and redirects.
+- Optional: a self-hosted ntfy server on your own domain, with HTTPS. Without it the broker still
+  runs; approval links then go to the broker log and the admin panel. The broker refuses `ntfy.sh`,
+  any other domain, plain HTTP, redirects, and a topic that answers without a bearer token.
 - A Bitwarden server: Bitwarden cloud, Vaultwarden, or Bitwarden's own self-hosted server. See [Self-hosted Bitwarden](#self-hosted-bitwarden).
 - A separate Bitwarden account for agents, with agent-safe items in one organization collection.
 
@@ -33,7 +35,7 @@ The admin page and the approval page below are the real pages. The phone, the no
 
 1. The agent calls `POST /v1/requests` with an item, a field, and a reason. The body has no other keys.
 2. The broker resolves the item in the agents collection, checks the field exists, and applies the auto rules, the rate limit, and the suspension list.
-3. Unless the field is on an auto rule, the broker sends a push to your ntfy topic. The push carries the item name, the field, the agent name, and the reason. It does not carry the value.
+3. Unless the field is on an auto rule, the broker sends a push to your ntfy topic. The push carries the item name, the field, the agent name, and the reason. It does not carry the value. With no ntfy configured, the same link goes to the broker log and to the admin panel instead.
 4. You open the link. The page is on this node's tailnet address, or on one private LAN address. It is never on a public address. You type the **approval password**. That password is not the Bitwarden master password.
 5. The broker reads the field and returns it on `GET /v1/requests/{id}/wait`. The value is delivered once. The request then expires.
 
@@ -49,6 +51,7 @@ The picture above is the boundary. This is what each part can and cannot do.
 | Broker process | Unlock `bw`, hold `BW_SESSION` in memory, read the one approved field. | Show the value on the approval page, in the audit log, or in the ntfy push. |
 | Phone on the tailnet | Open the approval page and approve or deny. | Approve without the approval password. Approve a different request than the one in the link. |
 | ntfy server | See the item name, the field, the agent, and the reason. | See the value or the approval password. |
+| Broker log and admin panel | Show a pending approval link, and only when no ntfy is configured. Panel access needs the admin token and loopback. | Show the value or the approval password. |
 | Anyone who can read the broker host | Read the config, the `bw` data directory, and the process memory. | — |
 
 Consequences, stated plainly:

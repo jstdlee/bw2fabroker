@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -77,6 +78,56 @@ func TestSendAndNoRedirect(t *testing.T) {
 	n2.Client.Transport = redir.Client().Transport
 	if err := n2.Send(context.Background(), Message{Body: "x"}); err == nil {
 		t.Fatal("redirect was followed or accepted")
+	}
+}
+
+func TestFromConfig(t *testing.T) {
+	if n, err := FromConfig("", "", "", ""); err != nil || n != nil {
+		t.Fatalf("empty config: %v %v", n, err)
+	}
+	partial := [][4]string{
+		{"https://ntfy.example.com", "", "", ""},
+		{"", "ntfy.example.com", "", ""},
+		{"", "", "approvals", ""},
+		{"", "", "", "tk"},
+		{"https://ntfy.example.com", "ntfy.example.com", "approvals", ""},
+		{"https://ntfy.example.com", "ntfy.example.com", "", "tk"},
+		{"", "ntfy.example.com", "approvals", "tk"},
+	}
+	for _, c := range partial {
+		if n, err := FromConfig(c[0], c[1], c[2], c[3]); err == nil {
+			t.Errorf("partial config %q accepted: %v", c, n)
+		}
+	}
+	n, err := FromConfig("https://ntfy.example.com", "ntfy.example.com", "approvals", "tk")
+	if err != nil || n == nil || n.Token != "tk" {
+		t.Fatalf("full config: %v %v", n, err)
+	}
+}
+
+func TestRequireAuthChecksTheToken(t *testing.T) {
+	var probeHdr http.Header
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		probeHdr = r.Header.Clone()
+		w.WriteHeader(http.StatusForbidden) // the token is not accepted
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	n, err := New(srv.URL, u.Hostname(), "approvals", "tk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.Client.Transport = srv.Client().Transport
+	err = n.RequireAuth(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "bearer token") {
+		t.Fatalf("bad token accepted: %v", err)
+	}
+	if probeHdr.Get("X-Cache") != "no" || probeHdr.Get("X-Firebase-No") != "true" {
+		t.Fatalf("probe would leave a message behind: %v", probeHdr)
 	}
 }
 

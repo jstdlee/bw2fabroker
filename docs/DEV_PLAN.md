@@ -151,17 +151,18 @@ fixed codes) and turns anything else into `rejected` / `internal_error`:
 
 ### 7. Notification: own ntfy domain only **[R20]**
 
-- The admin panel saves the ntfy URL, topic, and bearer token.
+- The admin panel saves the ntfy URL, topic, and bearer token. Notifications are optional: with all
+  four fields empty the broker runs, and approval links go to the log and the admin panel.
 - The broker **enforces** the domain, when that is saved and before every send:
   - scheme must be `https`;
-  - host must equal the configured own domain (`ntfy.own_domain` in the config, set once at
-    `broker init`);
+  - host must equal the configured own domain (`ntfy.own_domain` in the config);
   - host must not be `ntfy.sh` or any subdomain of it;
   - HTTP redirects are **not** followed, so a redirect cannot move the push to another host;
   - normal TLS certificate checks; no "skip verify" option.
 - If the check fails, the broker does not send, and the request ends `rejected` / `locked`.
-  `broker start` and `broker doctor` refuse to run with a bad ntfy config.
-- `set` sends a test message.
+- `broker start` and `broker doctor` refuse to run with a partly filled ntfy config, and they probe
+  it before serving: an anonymous publish and an anonymous read must both be refused, and the
+  configured bearer token must publish. A topic that answers without a token is refused.
 - The push holds the agent name, the item name, and the link
   `http://<broker tailnet IP or MagicDNS name>:<port>/a/<token>`. What the ntfy server does after it
   receives the push is outside the broker (owner decision).

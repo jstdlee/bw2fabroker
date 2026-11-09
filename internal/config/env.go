@@ -44,7 +44,7 @@ func ApplyEnv(c *Config) (bool, error) {
 		c.Ntfy.OwnDomain = d
 		set()
 	}
-	if u := os.Getenv("NTFY_URL"); u != "" && c.Ntfy.URL != u {
+	if u := os.Getenv("BROKER_NTFY_URL"); u != "" && c.Ntfy.URL != u {
 		c.Ntfy.URL = u
 		set()
 		if c.Ntfy.OwnDomain == "" {
@@ -53,13 +53,13 @@ func ApplyEnv(c *Config) (bool, error) {
 			}
 		}
 	}
-	if t := os.Getenv("NTFY_TOPIC"); t != "" && c.Ntfy.Topic != t {
+	if t := os.Getenv("BROKER_NTFY_TOPIC"); t != "" && c.Ntfy.Topic != t {
 		c.Ntfy.Topic = t
 		set()
 	}
-	tok := strings.TrimSpace(os.Getenv("NTFY_TOKEN"))
+	tok := strings.TrimSpace(os.Getenv("BROKER_NTFY_TOKEN"))
 	if tok == "" {
-		if p := os.Getenv("NTFY_TOKEN_FILE"); p != "" {
+		if p := os.Getenv("BROKER_NTFY_TOKEN_FILE"); p != "" {
 			b, err := os.ReadFile(p)
 			if err != nil {
 				return false, err

@@ -15,7 +15,9 @@ mkdir -p agent
 docker compose build
 docker compose up -d tailscale
 
-# One-time setup inside the broker container (data lives in the broker-data volume):
+# One-time setup inside the broker container (data lives in the broker-data volume).
+# Notifications are optional: without --ntfy-domain the broker runs, and approval links
+# go to the log and the admin panel.
 docker compose run --rm -it broker init --ntfy-domain ntfy.example.com
 # The init command prints an admin token once. Open http://127.0.0.1:8788/admin
 # from the host (publish that loopback port, or use the panel on the broker host)
@@ -28,6 +30,11 @@ docker compose up -d broker
 docker compose exec -it broker broker unlock                 # master password of the agents account
 docker compose exec broker broker doctor
 ```
+
+ntfy settings come from `.env` as `BROKER_NTFY_URL`, `BROKER_NTFY_DOMAIN`, `BROKER_NTFY_TOPIC`, and
+`BROKER_NTFY_TOKEN` (or `BROKER_NTFY_TOKEN_FILE`). Leave all four empty to run without
+notifications. The server must be `https` on that domain, and the topic must reject requests with
+no bearer token; `broker start` and `broker doctor` probe both before serving.
 
 The Bitwarden server can be cloud, Vaultwarden, or Bitwarden's own self-hosted install.
 Set it in the admin panel (Bitwarden server) or with `BW_SERVER`. See

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -71,6 +72,7 @@ type env struct {
 	ntfy  *fakeNotifier
 	token string
 	cfg   *config.Config
+	logs  *bytes.Buffer
 }
 
 var pwHash = func() string {
@@ -99,12 +101,13 @@ func newEnv(t *testing.T) *env {
 	}}
 	l, _ := auth.NewLinker(key)
 	n := &fakeNotifier{}
-	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	var logs bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logs, nil))
 	s := New(func() *config.Config { return cfg }, v, n, l, log)
 	s.Expiry = 2 * time.Second
 	s.Hold = 300 * time.Millisecond
 	s.SetApproverBase("http://100.64.0.1:8787")
-	return &env{t: t, srv: s, vault: v, ntfy: n, token: tok, cfg: cfg}
+	return &env{t: t, srv: s, vault: v, ntfy: n, token: tok, cfg: cfg, logs: &logs}
 }
 
 // agent calls the agent handler and checks that the body follows the contract exactly.
@@ -380,6 +383,62 @@ func TestLockedStates(t *testing.T) {
 	if e.srv.Store.Len() != 1 { // only the expired one above, kept for late waiters
 		t.Fatalf("failed push left a request: %d", e.srv.Store.Len())
 	}
+}
+
+// Without a notification channel the request still waits, its link is logged, and the admin
+// panel lists it with a link that approves.
+func TestNoNotifierLogsAndListsTheLink(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Notifier = nil
+	adminTok, adminHash, err := auth.NewAgentToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.cfg.Admin.TokenSHA256 = adminHash
+
+	r := e.create("staging-db", "password")
+	if r.Status != contract.StatusPending {
+		t.Fatalf("request without notifier: %+v", r)
+	}
+	if !strings.Contains(e.logs.String(), `"link":"http://100.64.0.1:8787/a/`) {
+		t.Fatalf("approval link not logged: %s", e.logs.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	req.RemoteAddr = "127.0.0.1:9"
+	req.AddCookie(&http.Cookie{Name: "broker_admin", Value: adminTok})
+	w := httptest.NewRecorder()
+	e.srv.AdminHandler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "staging-db / password") {
+		t.Fatalf("panel does not list the request: %d %s", w.Code, w.Body.String())
+	}
+	link := panelLink(t, w.Body.String())
+	if st, _ := e.approver("POST", link+"/approve", url.Values{"password": {approve}}, phone); st != http.StatusOK {
+		t.Fatalf("approve through the panel link: %d", st)
+	}
+	got := e.wait(*r.RequestID)
+	if got.Status != contract.StatusApproved || got.Value == nil || *got.Value != "pg-secret-1" {
+		t.Fatalf("value: %+v", got)
+	}
+}
+
+// panelLink returns the path of the first approval link in the panel HTML.
+func panelLink(t *testing.T, body string) string {
+	t.Helper()
+	const prefix = "http://100.64.0.1:8787/a/"
+	i := strings.Index(body, prefix)
+	if i < 0 {
+		t.Fatal("no approval link in the panel")
+	}
+	rest := body[i:]
+	if j := strings.IndexAny(rest, `"' <`); j >= 0 {
+		rest = rest[:j]
+	}
+	u, err := url.Parse(rest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Path
 }
 
 func TestListenersAreSeparate(t *testing.T) {

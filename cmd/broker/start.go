@@ -90,15 +90,29 @@ func cmdStart(args []string) error {
 	st0, _ := os.Stat(cfgPath)
 	holder := &configHolder{path: cfgPath, cfg: cfg, mtime: st0.ModTime(), log: log}
 
-	n, err := notify.New(cfg.Ntfy.URL, cfg.Ntfy.OwnDomain, cfg.Ntfy.Topic, cfg.Ntfy.Token)
+	n, err := notify.FromConfig(cfg.Ntfy.URL, cfg.Ntfy.OwnDomain, cfg.Ntfy.Topic, cfg.Ntfy.Token)
 	if err != nil {
-		return fmt.Errorf("ntfy config: %w (set ntfy in the admin panel)", err)
+		return fmt.Errorf("ntfy config: %w", err)
 	}
-	actx, acancel := context.WithTimeout(context.Background(), 10*time.Second)
-	err = n.RequireAuth(actx)
-	acancel()
-	if err != nil {
-		return fmt.Errorf("ntfy: %w", err)
+	var notifier notify.Notifier
+	if n == nil {
+		log.Warn("no notification channel is configured; approval links go to the log and the admin panel")
+	} else {
+		actx, acancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err = n.RequireAuth(actx)
+		acancel()
+		if err != nil {
+			return fmt.Errorf("ntfy: %w", err)
+		}
+		notifier = n
+	}
+	push := func(m notify.Message) {
+		if notifier == nil {
+			return
+		}
+		sctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_ = notifier.Send(sctx, m)
 	}
 
 	ts := tailscale.NewLocalAPI(cfg.Tailscale.Socket)
@@ -125,7 +139,7 @@ func cmdStart(args []string) error {
 			return fmt.Errorf("bitwarden server: %w", err)
 		}
 	}
-	srv := api.New(holder.Get, bw, n, linker, log)
+	srv := api.New(holder.Get, bw, notifier, linker, log)
 	if alog, err := audit.Open(filepath.Join(filepath.Dir(cfgPath), "audit.jsonl")); err != nil {
 		return fmt.Errorf("audit log: %w", err)
 	} else {
@@ -184,11 +198,7 @@ func cmdStart(args []string) error {
 	go manageApprover(ctx, srv, holder, ts, log)
 	go syncLoop(ctx, bw, log)
 	if mode == "lan" {
-		go func() {
-			sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			defer cancel()
-			_ = n.Send(sctx, notify.Message{Title: "bw2fabroker is on the LAN", Body: "The approval page is bound to " + addr.String() + ". Any device on this network can open it. Approval still requires the approval password.", Priority: 4, Tags: []string{"warning"}})
-		}()
+		go push(notify.Message{Title: "bw2fabroker is on the LAN", Body: "The approval page is bound to " + addr.String() + ". Any device on this network can open it. Approval still requires the approval password.", Priority: 4, Tags: []string{"warning"}})
 	}
 
 	if pw := os.Getenv("BW_MASTER_PASSWORD"); pw != "" && !bw.Unlocked() {
@@ -209,11 +219,7 @@ func cmdStart(args []string) error {
 	}
 	if !bw.Unlocked() {
 		log.Warn("vault locked; run `broker unlock` (Docker: docker exec -it broker broker unlock)")
-		go func() {
-			sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			defer cancel()
-			_ = n.Send(sctx, notify.Message{Title: "bw2fabroker is locked", Body: "Run `broker unlock` on the broker host to unlock the vault.", Priority: 4, Tags: []string{"lock"}})
-		}()
+		go push(notify.Message{Title: "bw2fabroker is locked", Body: "Run `broker unlock` on the broker host to unlock the vault.", Priority: 4, Tags: []string{"lock"}})
 	}
 
 	<-ctx.Done()

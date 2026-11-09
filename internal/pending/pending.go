@@ -4,6 +4,7 @@ package pending
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -286,6 +287,22 @@ func (s *Store) Wait(ctx context.Context, id, agent string, hold time.Duration) 
 		return resp
 	}
 	return r.final
+}
+
+// Open returns the requests still waiting for a person, soonest to expire first.
+func (s *Store) Open() []View {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	out := make([]View, 0, len(s.reqs))
+	for _, r := range s.reqs {
+		if r.state != statePending || !now.Before(r.Expires) {
+			continue
+		}
+		out = append(out, View{ID: r.ID, Agent: r.Agent, Reason: r.Reason, Item: r.Item, Field: r.Field, Expires: r.Expires, Pending: true})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Expires.Before(out[j].Expires) })
+	return out
 }
 
 // Len returns the number of stored requests (for tests and status).

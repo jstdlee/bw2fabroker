@@ -104,7 +104,7 @@ form.row button { padding: .3rem .7rem; margin-left: .3rem; }
 <p><button type="submit">Save addresses</button></p>
 </form></section>
 <section><h2>Notifications</h2>
-<p>The topic must reject requests that have no bearer token.</p>
+<p>The topic must reject requests that have no bearer token. Leave every field empty to run without notifications; approval links then appear in the log and under "Waiting for approval".</p>
 <form method="post" action="/admin/ntfy">
 <label for="url">URL</label>
 <input id="url" name="url" value="{{.NtfyURL}}" autocomplete="off">
@@ -116,6 +116,9 @@ form.row button { padding: .3rem .7rem; margin-left: .3rem; }
 <input id="ntfy_token" name="token" type="password" placeholder="leave blank to keep the current token" autocomplete="off">
 <p><button type="submit">Save notifications</button></p>
 </form></section>
+<section><h2>Waiting for approval</h2>
+{{if .Pending}}<ul>{{range .Pending}}<li><a href="{{.Link}}">{{.Item}} / {{.Field}}</a> for {{.Agent}} — {{.Reason}} (expires {{.Expires.Format "15:04:05"}})</li>{{end}}</ul>
+{{else}}<p>No request is waiting.</p>{{end}}</section>
 <section><h2>Agents</h2>
 <p>Adding an agent shows its bearer token once. Resume clears a suspension after three denials. Remove deletes the token.</p>
 <ul>{{range .Agents}}<li>{{.}}
@@ -167,12 +170,18 @@ form.row button { padding: .3rem .7rem; margin-left: .3rem; }
 </main>
 </body></html>`))
 
+type adminPending struct {
+	Agent, Item, Field, Reason, Link string
+	Expires                          time.Time
+}
+
 type adminView struct {
 	Login                                                                                             bool
 	Mode, Host, Public, NtfyURL, Domain, Topic, Notice, Secret, Query, AgentListen, Bind, VaultServer string
 	Port                                                                                              int
 	LAN, Unlocked                                                                                     bool
 	Agents                                                                                            []string
+	Pending                                                                                           []adminPending
 	Rules                                                                                             []config.AutoRule
 	TwoFA                                                                                             []string
 	Items                                                                                             []adminItem
@@ -281,16 +290,10 @@ func tokenMatches(storedHex, token string) bool {
 }
 
 func (s *Server) adminHome(w http.ResponseWriter, r *http.Request, notice string) {
-	cfg := s.Config()
-	v := adminView{
-		Mode: s.BindMode(), Host: cfg.Approver.BindHost, Public: cfg.Approver.PublicHost,
-		Port: cfg.Approver.Port, NtfyURL: cfg.Ntfy.URL, Domain: cfg.Ntfy.OwnDomain, Topic: cfg.Ntfy.Topic,
-		LAN: s.allowLAN.Load(), Unlocked: s.Vault.Unlocked(), Agents: cfg.AgentNames(), Rules: cfg.Auto, TwoFA: cfg.TwoFA.Items, AgentListen: cfg.Agent.Listen, VaultServer: cfg.Vault.Server,
-		Notice: notice, Query: r.URL.Query().Get("q"),
-	}
-	if cfg.Approver.BindIP != "" {
-		v.Host = cfg.Approver.BindIP
-	}
+	var v adminView
+	s.fill(r, &v)
+	v.Notice = notice
+	v.Query = r.URL.Query().Get("q")
 	if v.Query != "" && s.Vault.Unlocked() {
 		items, err := s.Vault.Search(r.Context(), v.Query)
 		if err == nil {
@@ -354,13 +357,20 @@ func (s *Server) adminBind(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminNtfy(w http.ResponseWriter, r *http.Request) {
 	s.adminMutate(w, r, "Notification settings saved.", func(c *config.Config) error {
-		c.Ntfy.URL = strings.TrimSpace(r.PostForm.Get("url"))
-		c.Ntfy.OwnDomain = strings.TrimSpace(r.PostForm.Get("domain"))
-		c.Ntfy.Topic = strings.TrimSpace(r.PostForm.Get("topic"))
+		url := strings.TrimSpace(r.PostForm.Get("url"))
+		domain := strings.TrimSpace(r.PostForm.Get("domain"))
+		topic := strings.TrimSpace(r.PostForm.Get("topic"))
+		if url == "" && domain == "" && topic == "" {
+			c.Ntfy = config.Ntfy{}
+			return c.Validate()
+		}
+		c.Ntfy.URL = url
+		c.Ntfy.OwnDomain = domain
+		c.Ntfy.Topic = topic
 		if tok := strings.TrimSpace(r.PostForm.Get("token")); tok != "" {
 			c.Ntfy.Token = tok
 		}
-		if _, err := notify.New(c.Ntfy.URL, c.Ntfy.OwnDomain, c.Ntfy.Topic, c.Ntfy.Token); err != nil {
+		if _, err := notify.FromConfig(c.Ntfy.URL, c.Ntfy.OwnDomain, c.Ntfy.Topic, c.Ntfy.Token); err != nil {
 			return err
 		}
 		return c.Validate()
@@ -593,6 +603,15 @@ func (s *Server) fill(r *http.Request, v *adminView) {
 	v.TwoFA = cfg.TwoFA.Items
 	v.AgentListen = cfg.Agent.Listen
 	v.VaultServer = cfg.Vault.Server
+	if s.Linker != nil {
+		base, _ := s.linkBase.Load().(string)
+		for _, pr := range s.Store.Open() {
+			v.Pending = append(v.Pending, adminPending{
+				Agent: pr.Agent, Item: pr.Item.Name, Field: pr.Field.String(), Reason: pr.Reason,
+				Link: base + "/a/" + s.Linker.Sign(pr.ID, pr.Expires), Expires: pr.Expires,
+			})
+		}
+	}
 	_ = r
 }
 
