@@ -239,6 +239,34 @@ func (n *Ntfy) RequireAuth(ctx context.Context) error {
 	return n.probeAuthed(ctx, u.String(), authed)
 }
 
+// CanRead reports whether the configured token may also read the topic. The broker only
+// publishes, so write-only is enough; provisioning sets it that way.
+func (n *Ntfy) CanRead(ctx context.Context) (bool, error) {
+	u, err := CheckURL(n.URL, n.OwnDomain)
+	if err != nil {
+		return false, err
+	}
+	raw := strings.TrimRight(u.String(), "/") + "/" + n.Topic + "/json?poll=1&since=1s"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+n.Token)
+	resp, err := n.Client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("ntfy read probe: %w", err)
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return true, nil
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return false, nil
+	default:
+		return false, fmt.Errorf("ntfy read probe returned %d", resp.StatusCode)
+	}
+}
+
 // probeAuthed publishes with the configured token. A token that ntfy rejects is a setup error,
 // not a surprise at the first approval.
 func (n *Ntfy) probeAuthed(ctx context.Context, raw string, body []byte) error {

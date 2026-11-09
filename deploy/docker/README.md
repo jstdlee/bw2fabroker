@@ -36,6 +36,12 @@ ntfy settings come from `.env` as `BROKER_NTFY_URL`, `BROKER_NTFY_DOMAIN`, `BROK
 notifications. The server must be `https` on that domain, and the topic must reject requests with
 no bearer token; `broker start` and `broker doctor` probe both before serving.
 
+Create the broker's ntfy user, its topic permissions, and its token with
+[deploy/ntfy/provision.sh](../ntfy/provision.sh): the broker is write-only, the phone's user
+read-only, anonymous clients denied. ntfy has no HTTP user API, so the script uses `docker exec`
+(default), `NTFY_SSH`, or `NTFY_LOCAL`. Its last step verifies the permissions with real requests,
+and the panel's **Send a test notification** re-runs the check plus one delivery.
+
 The Bitwarden server can be cloud, Vaultwarden, or Bitwarden's own self-hosted install.
 Set it in the admin panel (Bitwarden server) or with `BW_SERVER`. See
 [deploy/vaultwarden](../vaultwarden/README.md). Plain HTTP is accepted only for localhost,

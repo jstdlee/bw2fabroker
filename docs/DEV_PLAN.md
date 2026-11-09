@@ -163,6 +163,12 @@ fixed codes) and turns anything else into `rejected` / `internal_error`:
 - `broker start` and `broker doctor` refuse to run with a partly filled ntfy config, and they probe
   it before serving: an anonymous publish and an anonymous read must both be refused, and the
   configured bearer token must publish. A topic that answers without a token is refused.
+- Publisher exclusivity belongs to the ntfy ACL, not to the broker: `deploy/ntfy/provision.sh`
+  creates the broker user with **write-only** on the topic, the phone's user with **read-only**
+  (ntfy applies the most specific rule, so a wider `*` grant does not re-open the topic), and an
+  explicit deny for anonymous clients. It then verifies each rule with real requests. The panel's
+  **Send a test notification** re-runs the startup probes and delivers one push; doctor warns when
+  the broker token can read, which it never needs to.
 - The push holds the agent name, the item name, and the link
   `http://<broker tailnet IP or MagicDNS name>:<port>/a/<token>`. What the ntfy server does after it
   receives the push is outside the broker (owner decision).

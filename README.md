@@ -28,6 +28,28 @@ The admin page and the approval page below are the real pages. The phone, the no
 - Optional: a self-hosted ntfy server on your own domain, with HTTPS. Without it the broker still
   runs; approval links then go to the broker log and the admin panel. The broker refuses `ntfy.sh`,
   any other domain, plain HTTP, redirects, and a topic that answers without a bearer token.
+  [deploy/ntfy/provision.sh](deploy/ntfy/provision.sh) creates the broker's user, the topic
+  permissions, and its token.
+- A Bitwarden server: Bitwarden cloud, Vaultwarden, or Bitwarden's own self-hosted server. See [Self-hosted Bitwarden](#self-hosted-bitwarden).
+- A separate Bitwarden account for agents, with agent-safe items in one organization collection.
+
+### Prepare ntfy (optional)
+
+ntfy has no HTTP API for creating users; `ntfy user add` is a server-side command. The script runs
+it on the ntfy host, by default through `docker exec`, and then verifies the result:
+
+```sh
+NTFY_URL=https://ntfy.example.com \
+NTFY_READER=kid \
+ENV_FILE=/etc/bw2fabroker/env \
+deploy/ntfy/provision.sh
+```
+
+It grants the broker **write-only** on the topic, the phone's user **read-only**, anonymous clients
+nothing, and prints (and optionally writes) `BROKER_NTFY_*`. It exits non-zero unless the broker
+token publishes, anonymous publish and read are refused, and — when `NTFY_READER_TOKEN` is given —
+the reader cannot publish. Use `NTFY_SSH=user@host` or `NTFY_LOCAL=1` when ntfy does not run on the
+broker host.
 - A Bitwarden server: Bitwarden cloud, Vaultwarden, or Bitwarden's own self-hosted server. See [Self-hosted Bitwarden](#self-hosted-bitwarden).
 - A separate Bitwarden account for agents, with agent-safe items in one organization collection.
 
@@ -51,6 +73,7 @@ The picture above is the boundary. This is what each part can and cannot do.
 | Broker process | Unlock `bw`, hold `BW_SESSION` in memory, read the one approved field. | Show the value on the approval page, in the audit log, or in the ntfy push. |
 | Phone on the tailnet | Open the approval page and approve or deny. | Approve without the approval password. Approve a different request than the one in the link. |
 | ntfy server | See the item name, the field, the agent, and the reason. | See the value or the approval password. |
+| ntfy topic | Accept a publish only from the broker's write-only user. | Accept anonymous publish or read; accept a publish from the phone's read-only user. |
 | Broker log and admin panel | Show a pending approval link, and only when no ntfy is configured. Panel access needs the admin token and loopback. | Show the value or the approval password. |
 | Anyone who can read the broker host | Read the config, the `bw` data directory, and the process memory. | — |
 

@@ -162,3 +162,42 @@ func TestRejectPublicChannel(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCanRead(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		code int
+		want bool
+	}{
+		{"write-only token", http.StatusForbidden, false},
+		{"read-write token", http.StatusOK, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var auth string
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				auth = r.Header.Get("Authorization")
+				if r.URL.Path != "/approvals/json" || r.URL.Query().Get("poll") != "1" {
+					t.Errorf("probe hit %s", r.URL)
+				}
+				w.WriteHeader(c.code)
+			}))
+			defer srv.Close()
+			u, _ := url.Parse(srv.URL)
+			n, err := New(srv.URL, u.Hostname(), "approvals", "tk")
+			if err != nil {
+				t.Fatal(err)
+			}
+			n.Client.Transport = srv.Client().Transport
+			got, err := n.CanRead(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != c.want {
+				t.Fatalf("CanRead = %v, want %v", got, c.want)
+			}
+			if auth != "Bearer tk" {
+				t.Fatalf("probe sent %q", auth)
+			}
+		})
+	}
+}
