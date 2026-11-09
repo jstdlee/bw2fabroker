@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 320" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0 0 L8 4.5 L0 9 Z" fill="#86868b"/>
+    </marker>
+  </defs>
+  <g fill="#ffffff" stroke="#d2d2d7">
+    <rect x="65"  y="40" width="210" height="155" rx="14"/>
+    <rect x="330" y="40" width="210" height="155" rx="14"/>
+    <rect x="595" y="40" width="210" height="155" rx="14"/>
+    <rect x="860" y="40" width="210" height="155" rx="14"/>
+    <rect x="1125" y="40" width="210" height="155" rx="14"/>
+  </g>
+  <g stroke="#86868b" stroke-width="1.5" fill="none" marker-end="url(#a)">
+    <line x1="281" y1="118" x2="324" y2="118"/>
+    <line x1="546" y1="118" x2="589" y2="118"/>
+    <line x1="811" y1="118" x2="854" y2="118"/>
+    <line x1="1076" y1="118" x2="1119" y2="118"/>
+  </g>
+  <g text-anchor="middle">
+    <g fill="#0071e3" font-size="22" font-weight="700">
+      <text x="170"  y="82">1</text>
+      <text x="435"  y="82">2</text>
+      <text x="700"  y="82">3</text>
+      <text x="965"  y="82">4</text>
+      <text x="1230" y="82">5</text>
+    </g>
+    <g fill="#1d1d1f" font-size="17" font-weight="600">
+      <text x="170"  y="110">The agent asks</text>
+      <text x="435"  y="110">The broker checks</text>
+      <text x="700"  y="110">Your phone buzzes</text>
+      <text x="965"  y="110">You approve</text>
+      <text x="1230" y="110">The value returns</text>
+    </g>
+    <g fill="#6e6e73" font-size="14">
+      <text x="170"  y="134">One field of one item,</text>
+      <text x="170"  y="154">with a reason.</text>
+      <text x="435"  y="134">The item, the field,</text>
+      <text x="435"  y="154">the rules, the limit.</text>
+      <text x="700"  y="134">The ntfy push lands.</text>
+      <text x="700"  y="154">You open the link.</text>
+      <text x="965"  y="134">You read the reason and</text>
+      <text x="965"  y="154">type the password.</text>
+      <text x="1230" y="134">One value, once,</text>
+      <text x="1230" y="154">in a fixed JSON shape.</text>
+    </g>
+  </g>
+  <text x="700" y="285" text-anchor="middle" fill="#6e6e73" font-size="17">One approval · one field · nothing else.</text>
+</svg>
