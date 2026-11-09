@@ -521,3 +521,72 @@ func TestAdminCannotRunBW(t *testing.T) {
 		t.Fatalf("admin bw runner still exists: %d", w.Code)
 	}
 }
+
+// TestMCPOverHTTP checks that the agent listener speaks MCP with the same token.
+func TestMCPOverHTTP(t *testing.T) {
+	e := newEnv(t)
+	call := func(token, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		e.srv.AgentHandler().ServeHTTP(w, req)
+		return w
+	}
+	if w := call("", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`); w.Code != http.StatusUnauthorized {
+		t.Fatalf("mcp without a token: %d", w.Code)
+	}
+	w := call(e.token, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("mcp status %d: %s", w.Code, w.Body.String())
+	}
+	for _, name := range []string{"list_items", "search_items", "request_field", "broker_status"} {
+		if !strings.Contains(w.Body.String(), `"name":"`+name+`"`) {
+			t.Fatalf("the tool %q is missing: %s", name, w.Body.String())
+		}
+	}
+	w = call(e.token, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_items","arguments":{}}}`)
+	if strings.Contains(w.Body.String(), "pg-secret-1") {
+		t.Fatalf("the mcp catalog leaks a value: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "staging-db") {
+		t.Fatalf("the mcp catalog has no item: %s", w.Body.String())
+	}
+}
+
+// TestCatalogShape checks the exact keys the catalog uses and that no value is in it.
+func TestCatalogShape(t *testing.T) {
+	e := newEnv(t)
+	req := httptest.NewRequest(http.MethodGet, "/v1/items", nil)
+	req.Header.Set("Authorization", "Bearer "+e.token)
+	w := httptest.NewRecorder()
+	e.srv.AgentHandler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("catalog status %d", w.Code)
+	}
+	raw := w.Body.String()
+	if strings.Contains(raw, "pg-secret-1") {
+		t.Fatalf("the catalog leaks a value: %s", raw)
+	}
+	var body struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatalf("catalog body: %v", err)
+	}
+	if len(body.Items) == 0 {
+		t.Fatalf("the catalog is empty: %s", raw)
+	}
+	for _, item := range body.Items {
+		for _, key := range []string{"id", "name", "folder", "fields"} {
+			if _, ok := item[key]; !ok {
+				t.Fatalf("the catalog item has no %q key: %s", key, raw)
+			}
+		}
+		if len(item) != 4 {
+			t.Fatalf("the catalog item has unexpected keys: %s", raw)
+		}
+	}
+}

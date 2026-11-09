@@ -30,12 +30,26 @@ The process needs `BROKER_URL` and `BROKER_TOKEN` (or `BROKER_TOKEN_FILE`). A cl
 | `list_items` | none | item names and field names |
 | `search_items` | `q` | the same, matched by name |
 | `request_field` | `item`, `field`, `reason` | one JSON object: `request_id`, `status`, `code`, `value` |
+| `broker_status` | none | whether the broker answers, and how many items it can see |
 
 `request_field` waits for the user. `isError` is false only when `status` is `approved`.
 
 `item` is the id when you have it, else the exact name. `field` is `username`, `password`, `totp`, `uri`, `notes`, `custom:<name>`, `card:<part>`, `identity:<part>`, or `attachment:<file>`. `reason` is one line, at most 120 characters, no URL. The user reads it before approving. It must be true.
 
-There is also a `broker://contract` resource (the HTTP shape, no secrets) and a `request-field` prompt. Neither one returns a value. The value comes only from `request_field`.
+Resources: `broker://contract` (the HTTP shape, no secrets), `broker://setup` (a ready-to-paste client configuration), `broker://fields` (the exact field names the broker accepts), and `broker://policy` (the rules an agent must follow). Prompts: `request-field` and `setup-mcp`. None of them returns a value. The value comes only from `request_field`.
+
+## Two transports
+
+`broker-mcp` speaks MCP on stdin and stdout. The broker also serves MCP over HTTP on the same agent address, at `/mcp`, with the same bearer token:
+
+```sh
+curl -s -X POST "$BROKER_URL/mcp" \
+  -H "Authorization: Bearer $BROKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+Use the stdio server when the client starts processes. Use the HTTP endpoint when the client speaks HTTP MCP, or when the agent is not on the same machine as the client.
 
 ## Rules
 

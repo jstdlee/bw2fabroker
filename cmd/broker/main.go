@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"golang.org/x/term"
 
@@ -159,11 +161,20 @@ func cmdInit(args []string) error {
 	if err := config.Save(p, c); err != nil {
 		return err
 	}
-	fmt.Printf("Wrote %s (mode 0600).\nAdmin panel: http://127.0.0.1:8788/admin\nAdmin token (shown once):\n%s\n", p, token)
+"fmt.Printf("Wrote %s (mode 0600).\nAdmin panel: http://127.0.0.1:8788/admin\nAdmin token (shown once):\n%s\n", p, token)
 	if *domain == "" {
 		fmt.Println("No ntfy domain given: the broker runs without notifications, and approval links go to the log and the admin panel. Set ntfy in that panel when you have a server.")
 	} else {
 		fmt.Println("Set ntfy url, topic, and bearer token in that panel, and add agents there.")
+	}
+	envPath, created, err := writeDotEnv(filepath.Dir(p))
+	if err != nil {
+		return fmt.Errorf("credential file: %w", err)
+	}
+	if created {
+		fmt.Printf("Wrote %s (mode 0600). Put the credentials there; the broker reads it at startup.\n", envPath)
+	} else {
+		fmt.Printf("Credential file %s already exists. The broker reads it at startup.\n", envPath)
 	}
 	return nil
 }

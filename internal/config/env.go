@@ -11,6 +11,16 @@ import (
 	"github.com/jstdlee/bw2fabroker/internal/notify"
 )
 
+// firstEnv returns the value of the first name that is set and not empty.
+func firstEnv(names ...string) string {
+	for _, n := range names {
+		if v := os.Getenv(n); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // ApplyEnv copies credentials and bind settings from the environment when they are set.
 // A password is re-hashed only when it does not match the stored hash. Tokens are stored
 // only as hashes, except the ntfy bearer token, which has to be sent to ntfy.
@@ -44,7 +54,8 @@ func ApplyEnv(c *Config) (bool, error) {
 		c.Ntfy.OwnDomain = d
 		set()
 	}
-	if u := os.Getenv("BROKER_NTFY_URL"); u != "" && c.Ntfy.URL != u {
+	u := firstEnv("BROKER_NTFY_URL", "NTFY_URL")
+	if u != "" && c.Ntfy.URL != u {
 		c.Ntfy.URL = u
 		set()
 		if c.Ntfy.OwnDomain == "" {
@@ -53,11 +64,11 @@ func ApplyEnv(c *Config) (bool, error) {
 			}
 		}
 	}
-	if t := os.Getenv("BROKER_NTFY_TOPIC"); t != "" && c.Ntfy.Topic != t {
+	if t := firstEnv("BROKER_NTFY_TOPIC", "NTFY_TOPIC"); t != "" && c.Ntfy.Topic != t {
 		c.Ntfy.Topic = t
 		set()
 	}
-	tok := strings.TrimSpace(os.Getenv("BROKER_NTFY_TOKEN"))
+	tok := strings.TrimSpace(firstEnv("BROKER_NTFY_TOKEN", "NTFY_TOKEN"))
 	if tok == "" {
 		if p := os.Getenv("BROKER_NTFY_TOKEN_FILE"); p != "" {
 			b, err := os.ReadFile(p)
@@ -91,6 +102,18 @@ func ApplyEnv(c *Config) (bool, error) {
 	}
 	if s := os.Getenv("BW_SERVER"); s != "" && c.Vault.Server != s {
 		c.Vault.Server = s
+		set()
+	}
+	if d := os.Getenv("BROKER_VAULT_APPDATA"); d != "" && c.Vault.AppData != d {
+		c.Vault.AppData = d
+		set()
+	}
+	if p := os.Getenv("BROKER_VAULT_BW_PATH"); p != "" && c.Vault.BWPath != p {
+		c.Vault.BWPath = p
+		set()
+	}
+	if a := os.Getenv("BROKER_ADMIN_LISTEN"); a != "" && c.Admin.Server != a {
+		c.Admin.Server = a
 		set()
 	}
 	return changed, nil

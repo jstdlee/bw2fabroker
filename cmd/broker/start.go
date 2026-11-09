@@ -70,6 +70,13 @@ func cmdStart(args []string) error {
 		return errors.New("usage: broker start")
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	// The credential file may hold BROKER_CONFIG itself, so read the binary and
+	// working directory first, then the config directory.
+	if p, n, err := config.LoadDotEnvFrom(config.AppDirs()...); err != nil {
+		return fmt.Errorf("credential file: %w", err)
+	} else if p != "" {
+		log.Info("audit", slog.String("event", "dotenv_loaded"), slog.String("path", p), slog.Int("keys", n))
+	}
 	cfgPath := config.Path()
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -131,6 +138,9 @@ func cmdStart(args []string) error {
 		return err
 	}
 	bw := vault.NewBW(cfg.Vault.BWPath, cfg.Vault.AppData)
+	if err := checkVaultIsolation(cfg, log); err != nil {
+		return err
+	}
 	if cfg.Vault.Server != "" {
 		sctx, scancel := context.WithTimeout(context.Background(), 30*time.Second)
 		err := bw.SetServer(sctx, cfg.Vault.Server)
@@ -139,7 +149,9 @@ func cmdStart(args []string) error {
 			return fmt.Errorf("bitwarden server: %w", err)
 		}
 	}
-	srv := api.New(holder.Get, bw, notifier, linker, log)
+srv := api.New(holder.Get, bw, notifier, linker, log)
+	srv.Version = version
+	srv.Tailscale = ts
 	if alog, err := audit.Open(filepath.Join(filepath.Dir(cfgPath), "audit.jsonl")); err != nil {
 		return fmt.Errorf("audit log: %w", err)
 	} else {
@@ -184,13 +196,18 @@ func cmdStart(args []string) error {
 	}()
 	log.Info("audit", slog.String("event", "started"), slog.String("agent_listen", cfg.Agent.Listen), slog.String("bind", addr.String()), slog.String("bind_mode", mode), slog.String("version", version))
 	if cfg.Admin.Server != "" && cfg.Admin.TokenSHA256 != "" {
-		adminHTTP := &http.Server{Addr: cfg.Admin.Server, Handler: srv.AdminHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second}
+		mux := http.NewServeMux()
+		mux.Handle("/admin", srv.AdminHandler())
+		mux.Handle("/admin/", srv.AdminHandler())
+		mux.Handle("/", srv.LandingHandler())
+		adminHTTP := &http.Server{Addr: cfg.Admin.Server, Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second}
 		go func() {
 			log.Info("audit", slog.String("event", "admin_up"), slog.String("addr", cfg.Admin.Server))
 			if err := adminHTTP.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Error("admin panel stopped", slog.String("error", err.Error()))
 			}
 		}()
+		log.Info("audit", slog.String("event", "landing_up"), slog.String("url", "http://"+cfg.Admin.Server+"/"))
 	} else if cfg.Admin.Server != "" {
 		log.Warn("admin.server is set but there is no admin token; set BROKER_ADMIN_TOKEN or run broker init")
 	}
@@ -229,6 +246,28 @@ func cmdStart(args []string) error {
 	_ = agentSrv.Shutdown(shutdown)
 	bw.Lock()
 	return nil
+}
+
+// checkVaultIsolation keeps the agents account to the broker. A Bitwarden CLI data directory
+// that another user on this host can read would let that user unlock the same account and read
+// the items directly, without the broker and without your approval.
+func checkVaultIsolation(cfg *config.Config, log *slog.Logger) error {
+	if err := vault.CheckBinary(cfg.Vault.BWPath); err != nil {
+		return err
+	}
+	dir := cfg.Vault.AppData
+	if dir == "" {
+		dir = vault.DefaultAppData()
+	}
+	if _, err := os.Stat(dir); err != nil {
+		log.Warn("the Bitwarden CLI data directory does not exist yet; log in with `bw login --apikey` as this user", slog.String("path", dir))
+		return nil
+	}
+	if vault.InContainer() {
+		log.Warn("running in a container; the container is the boundary for the Bitwarden session", slog.String("path", dir))
+		return nil
+	}
+	return vault.CheckIsolation(dir)
 }
 
 func listenAgent(cfg *config.Config) (net.Listener, error) {

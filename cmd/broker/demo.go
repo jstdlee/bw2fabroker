@@ -37,6 +37,7 @@ func cmdDemo(args []string) error {
 	fs.SetOutput(os.Stderr)
 	agentListen := fs.String("agent", "127.0.0.1:8786", "agent API listen address (loopback only)")
 	approverListen := fs.String("approver", "127.0.0.1:8787", "approval page listen address (loopback only)")
+	adminListen := fs.String("admin", "127.0.0.1:8788", "admin panel and guides listen address (loopback only)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -44,13 +45,16 @@ func cmdDemo(args []string) error {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: broker demo [--agent 127.0.0.1:8786] [--approver 127.0.0.1:8787]")
+		return errors.New("usage: broker demo [--agent 127.0.0.1:8786] [--approver 127.0.0.1:8787] [--admin 127.0.0.1:8788]")
 	}
 	if err := loopbackOnly(*agentListen); err != nil {
 		return fmt.Errorf("agent: %w", err)
 	}
 	if err := loopbackOnly(*approverListen); err != nil {
 		return fmt.Errorf("approver: %w", err)
+	}
+	if err := loopbackOnly(*adminListen); err != nil {
+		return fmt.Errorf("admin: %w", err)
 	}
 
 	key, err := auth.NewKey(32)
@@ -65,6 +69,10 @@ func cmdDemo(args []string) error {
 	if err != nil {
 		return err
 	}
+	adminToken, adminHash, err := auth.NewAgentToken()
+	if err != nil {
+		return err
+	}
 	cfg := &config.Config{
 		HMACKey: key, ApprovalPassword: pwHash,
 		Agents: map[string]config.Agent{"demo": {TokenSHA256: hash, Created: time.Now()}},
@@ -72,6 +80,8 @@ func cmdDemo(args []string) error {
 	}
 	cfg.Defaults()
 	cfg.Agent.Listen = *agentListen
+	cfg.Admin.Server = *adminListen
+	cfg.Admin.TokenSHA256 = adminHash
 
 	vault := &vaulttest.Fake{Items: []vaulttest.Item{
 		{ID: idStaging, Name: "staging-db", Folder: "demo", Fields: map[string]string{
@@ -92,6 +102,7 @@ func cmdDemo(args []string) error {
 	inbox := &demoInbox{}
 	srv := api.New(func() *config.Config { return cfg }, vault, inbox, linker, log)
 	srv.AllowLoopback = true
+	srv.SetExposure("loopback")
 
 	agentL, err := net.Listen("tcp", *agentListen)
 	if err != nil {
@@ -103,6 +114,11 @@ func cmdDemo(args []string) error {
 		return fmt.Errorf("approver listener: %w", err)
 	}
 	defer approverL.Close()
+	adminL, err := net.Listen("tcp", *adminListen)
+	if err != nil {
+		return fmt.Errorf("admin listener: %w", err)
+	}
+	defer adminL.Close()
 
 	base := "http://" + approverL.Addr().String()
 	srv.SetApproverBase(base)
@@ -112,6 +128,11 @@ func cmdDemo(args []string) error {
 
 	agentSrv := &http.Server{Handler: srv.AgentHandler(), ReadHeaderTimeout: 10 * time.Second, WriteTimeout: 70 * time.Second, IdleTimeout: 120 * time.Second}
 	approverSrv := &http.Server{Handler: inbox.wrap(srv.ApproverHandler()), ReadHeaderTimeout: 10 * time.Second, WriteTimeout: 70 * time.Second}
+	adminMux := http.NewServeMux()
+	adminMux.Handle("/admin", srv.AdminHandler())
+	adminMux.Handle("/admin/", srv.AdminHandler())
+	adminMux.Handle("/", srv.LandingHandler())
+	adminSrv := &http.Server{Handler: adminMux, ReadHeaderTimeout: 10 * time.Second, WriteTimeout: 60 * time.Second}
 	go func() {
 		if err := agentSrv.Serve(agentL); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("agent listener stopped", slog.String("error", err.Error()))
@@ -124,14 +145,24 @@ func cmdDemo(args []string) error {
 			stop()
 		}
 	}()
+	go func() {
+		if err := adminSrv.Serve(adminL); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("admin listener stopped", slog.String("error", err.Error()))
+			stop()
+		}
+	}()
 
 	fmt.Printf(`bw2fabroker DEMO
 This is a fake vault on this machine. It is not Bitwarden, not Tailscale, and not ntfy.
 
 Approval password: %s
 Agent token:       %s
+Admin token:       %s
 BROKER_URL=http://%s
-Approval page:     %s/
+
+Overview and guides: http://%s/
+Admin panel:        http://%s/admin
+Approval page:      %s/
 
 Items (ask unless noted):
   staging-db   username, password
@@ -143,7 +174,7 @@ Try:
   BROKER_TOKEN=%s BROKER_URL=http://%s ./bin/broker-get staging-db password --reason "try the demo approval page"
 
 Open the approval page, or the link printed here when a request arrives. Ctrl-C stops the demo.
-`, demoPassword, token, agentL.Addr().String(), base, token, agentL.Addr().String())
+`, demoPassword, token, adminToken, agentL.Addr().String(), adminL.Addr().String(), adminL.Addr().String(), base, token, agentL.Addr().String())
 
 	log.Info("audit", slog.String("event", "demo_started"), slog.String("agent_listen", agentL.Addr().String()), slog.String("version", version))
 	<-ctx.Done()

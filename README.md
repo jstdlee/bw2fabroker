@@ -10,6 +10,8 @@ Design notes: [docs/DEV_PLAN.md](docs/DEV_PLAN.md).
 
 The admin page and the approval page below are the real pages. The phone, the notification, and the story are illustrations of the same flow.
 
+![Overview](docs/gallery/landing.png)
+
 ![Admin panel, light](docs/gallery/admin.png)
 
 ![Approval page](docs/gallery/approval.png)
@@ -167,7 +169,7 @@ Fields: `username`, `password`, `totp`, `uri`, `notes`, `custom:<name>`, `card:<
 
 **MCP.** [skills/bw-broker-mcp/SKILL.md](skills/bw-broker-mcp/SKILL.md)
 
-`broker-mcp` speaks MCP on stdin and stdout (protocol `2024-11-05`, `2025-03-26`, and `2025-06-18`). Tools: `list_items`, `search_items`, `request_field`. Resource: `broker://contract`. Prompt: `request-field`. It uses the same `BROKER_URL` and `BROKER_TOKEN`. `request_field` waits, and `isError` is set unless the status is `approved`.
+`broker-mcp` speaks MCP on stdin and stdout (protocol `2024-11-05`, `2025-03-26`, and `2025-06-18`). Tools: `list_items`, `search_items`, `request_field`, `broker_status`. Resources: `broker://contract`, `broker://setup`, `broker://fields`, `broker://policy`. Prompts: `request-field`, `setup-mcp`. It uses the same `BROKER_URL` and `BROKER_TOKEN`. `request_field` waits, and `isError` is set unless the status is `approved`.
 
 ```json
 {
@@ -183,6 +185,15 @@ Fields: `username`, `password`, `totp`, `uri`, `notes`, `custom:<name>`, `card:<
 }
 ```
 
+The broker also speaks MCP over HTTP, on the same agent address, at `/mcp`, with the same bearer token. A client that speaks HTTP MCP does not need `broker-mcp` at all:
+
+```sh
+curl -s -X POST "$BROKER_URL/mcp" \
+  -H "Authorization: Bearer $BROKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
 ## Admin
 
 | Command | Does |
@@ -193,6 +204,36 @@ Fields: `username`, `password`, `totp`, `uri`, `notes`, `custom:<name>`, `card:<
 | `broker status`, `broker doctor` | State of the running broker, setup checks |
 
 `passwd`, `ntfy`, `net`, `agent`, `auto`, `admin-token`, and `2fa` are not CLI commands. The panel at `http://127.0.0.1:8788/admin` does that work, and it also sets the Bitwarden server URL. The panel does not run arbitrary `bw` commands. It answers only on loopback.
+
+The panel opens with the state of every dependency: the vault, the notifications, Tailscale, the approval page, and the agent API. Each row has a lamp and a word, so the state does not depend on colour, and the rows that can be tested have a **Test** button that runs the check and says what happened.
+
+### The pages on `127.0.0.1:8788`
+
+The broker serves four pages next to the panel, all loopback-only:
+
+| Page | For |
+|---|---|
+| `/` | The overview: what the broker is doing now, where every address is, and how a request moves |
+| `/agent` | The agent guide: tokens, the REST API, the CLI, the field names, and the rules |
+| `/mcp` | The MCP guide: the client configuration, the tools, the resources, the prompts |
+| `/api` | The REST reference: every endpoint, every status value, every code, the limits |
+
+### The credential file
+
+`broker init` writes a `.env` next to the config. The broker reads it at startup, and the agent-side tools (`broker-get`, `broker-mcp`) read it from the working directory. A variable that is already in the environment wins over the file.
+
+```sh
+BROKER_APPROVAL_PASSWORD=...      # the password you type on the phone
+BROKER_ADMIN_TOKEN=...            # the key for the loopback panel
+BROKER_NTFY_DOMAIN=ntfy.example.com
+NTFY_URL=https://ntfy.example.com
+NTFY_TOPIC=bw-approvals
+NTFY_TOKEN=...
+BW_SERVER=https://vault.bitwarden.com
+BW_MASTER_PASSWORD=...
+```
+
+Keep the file mode `0600`. It holds credentials, not configuration.
 
 ## Limits
 
@@ -214,14 +255,23 @@ make docker       # build the image (broker, broker-get, broker-mcp, bw)
 
 ## Demo
 
-No Tailscale, no ntfy, no Bitwarden. A fake vault on localhost, with the same approval page:
+No Tailscale, no ntfy, no Bitwarden. A fake vault on localhost, with the same approval page, the same admin panel, and the same guides:
 
 ```sh
 make build
 ./bin/broker demo
 ```
 
-It prints an approval password, an agent token, and the two URLs. Then:
+It prints an approval password, an agent token, an admin token, and the URLs:
+
+| Address | What |
+|---|---|
+| `http://127.0.0.1:8786` | The agent API. `broker-get`, `broker-mcp`, and MCP over HTTP |
+| `http://127.0.0.1:8787` | The approval page your phone opens |
+| `http://127.0.0.1:8788/` | The overview and the guides |
+| `http://127.0.0.1:8788/admin` | The admin panel, with the printed admin token |
+
+Then:
 
 ```sh
 export BROKER_TOKEN=...          # printed once at startup
