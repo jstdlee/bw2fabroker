@@ -177,6 +177,7 @@ Open the approval page, or the link printed here when a request arrives. Ctrl-C 
 `, demoPassword, token, adminToken, agentL.Addr().String(), adminL.Addr().String(), adminL.Addr().String(), base, token, agentL.Addr().String())
 
 	log.Info("audit", slog.String("event", "demo_started"), slog.String("agent_listen", agentL.Addr().String()), slog.String("version", version))
+	go srv.RequestCleaner(ctx)
 	<-ctx.Done()
 	shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

@@ -251,6 +251,26 @@ func (s *Store) CancelAll(code contract.Code) []*Request {
 	return out
 }
 
+// ForceClean drops every request in the store, whatever its state. A pending or approving request
+// ends denied with code expired, and every waiter wakes; a final result is erased at once without
+// the usual keepFinal grace. It returns how many requests it removed. The periodic cleaner uses it
+// so that no request id outlives a full cycle even if its own timers were lost.
+func (s *Store) ForceClean() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for id, r := range s.reqs {
+		if r.state != stateFinal {
+			s.finishLocked(r, contract.Denied(r.ID, contract.CodeExpired), "")
+		}
+		r.value = ""
+		r.final = contract.Response{}
+		delete(s.reqs, id)
+		n++
+	}
+	return n
+}
+
 // Wait holds up to hold for a final result. An approved value is handed out once and then erased.
 func (s *Store) Wait(ctx context.Context, id, agent string, hold time.Duration) contract.Response {
 	s.mu.Lock()
