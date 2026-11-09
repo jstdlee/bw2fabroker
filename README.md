@@ -281,6 +281,7 @@ What this does not protect against: you approving a request you did not read; an
 - The Bitwarden account logs in with `broker login` (an API key, or email + master password + two-step code). The broker does not do SSO sign-in.
 - High-frequency secrets (a session cookie that changes every minute, a one-time code you did not mean to hand to an agent). TOTP is allowed only as an explicit ask, and it is never automatic.
 - Replacing Bitwarden's own access control for humans. Humans keep using Bitwarden. This is the gate in front of agents.
+- Everything on one machine, and secrets are only needed while you are at the keyboard. Use `bw` (CLI or `bw serve`) directly. The broker earns its keep with the approval gate, and in the remote setup where agents in other places query `http://broker-host:8786` through `broker-get`, `broker-mcp`, or plain HTTP.
 
 
 ## Limits
