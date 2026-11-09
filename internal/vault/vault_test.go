@@ -136,3 +136,54 @@ func TestSetServer(t *testing.T) {
 		}
 	}
 }
+
+func TestLogin(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "log")
+	script := filepath.Join(dir, "bw")
+	body := `#!/bin/sh
+printf 'args=%s\n' "$*" > "` + logPath + `"
+printf 'client=%s\nsecret=%s\nnointeraction=%s\n' "$BW_CLIENTID" "$BW_CLIENTSECRET" "$BW_NOINTERACTION" >> "` + logPath + `"
+[ "$BW_CLIENTID" = "bad" ] && exit 3
+exit 0
+`
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b := NewBW(script, dir)
+	ctx := context.Background()
+
+	read := func() string {
+		out, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Remove(logPath)
+		return string(out)
+	}
+
+	if err := b.Login(ctx, true, "user.123", "sec-456", ""); err != nil {
+		t.Fatal(err)
+	}
+	got := read()
+	if !strings.Contains(got, "args=login --apikey") {
+		t.Fatalf("api key login ran %q", got)
+	}
+	if !strings.Contains(got, "client=user.123") || !strings.Contains(got, "secret=sec-456") {
+		t.Fatalf("api key did not reach bw: %q", got)
+	}
+	if strings.Contains(got, "nointeraction=true") {
+		t.Fatalf("login suppressed prompts: %q", got)
+	}
+
+	if err := b.Login(ctx, false, "", "", "ada@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); !strings.Contains(got, "args=login ada@example.test") {
+		t.Fatalf("email login ran %q", got)
+	}
+
+	if err := b.Login(ctx, true, "bad", "sec-456", ""); err == nil || !strings.Contains(err.Error(), "bw login") {
+		t.Fatalf("failed login returned %v", err)
+	}
+}

@@ -113,7 +113,7 @@ The broker does not ship a vault. It points `bw` at a server:
 
 Set the URL in the admin panel (Bitwarden server) or with `BW_SERVER`. Saving it runs `bw config server`. Startup runs it again from `vault.server`. HTTPS is the normal case. Plain HTTP is accepted only for localhost, a loopback address, a private address, or a tailnet address. For a private CA, set `NODE_EXTRA_CA_CERTS` for the broker user; that variable is passed through to `bw`.
 
-Log in once as the agents account: `bw login --apikey`. Unlock later with that account's master password (`broker unlock` or `BW_MASTER_PASSWORD`). That master password is not the approval password.
+Log in once as the agents account: `broker login` (Docker: `docker exec -it <container> broker login`; `--email you@example.com` uses the email form, otherwise the API key from `BW_CLIENTID`/`BW_CLIENTSECRET` or a prompt). The login state lives in the broker's own profile, so a session from another machine cannot stand in for it. Unlock later with that account's master password (`broker unlock` or `BW_MASTER_PASSWORD`). That master password is not the approval password.
 
 ## Install (app mode, Linux + systemd)
 
@@ -124,7 +124,7 @@ npm install -g @bitwarden/cli   # bw must be on PATH for the broker user
 sudo -u broker -H env BROKER_CONFIG=/etc/bw2fabroker/config.toml HOME=/var/lib/bw2fabroker sh -c '
   broker init --ntfy-domain ntfy.example.com            # prints the admin token once
   BITWARDENCLI_APPDATA_DIR=/var/lib/bw2fabroker/bw bw config server https://vault.example.com
-  BITWARDENCLI_APPDATA_DIR=/var/lib/bw2fabroker/bw bw login --apikey   # agents account API key
+  broker login --apikey                                 # agents account API key
 '
 # Open http://127.0.0.1:8788/admin with that token.
 sudo systemctl enable --now bw2fabroker

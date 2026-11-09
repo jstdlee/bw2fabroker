@@ -182,7 +182,9 @@ fixed codes) and turns anything else into `rejected` / `internal_error`:
 - Server: Bitwarden cloud, Vaultwarden, or Bitwarden's own self-hosted server. The URL is
   `vault.server` (or `BW_SERVER`). The admin panel and `broker start` run `bw config server`.
   HTTPS, or HTTP only for localhost, a private address, or a tailnet address.
-- Once, as the broker user: `bw login --apikey` with the agents account's API key.
+- Once, as the broker user: `broker login` with the agents account's API key (or `--email`).
+  The login state lives in the broker's own `bw` profile, so a `BW_SESSION` from another machine
+  or profile cannot stand in for it, and the broker never reads `BW_SESSION` from its environment.
 - `broker start` (app mode) or `broker unlock` (Docker) asks for the **agents account's** master
   password on a prompt the broker owns (its TTY or `systemd-ask-password`), runs `bw unlock --raw`,
   and keeps `BW_SESSION` in memory only **[R12]**.
