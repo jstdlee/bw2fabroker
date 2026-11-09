@@ -128,16 +128,16 @@ BROKER_TOKEN=bwb_...</code></pre>`)
 <tr><td><code>GET /v1/requests/{id}/wait</code></td><td>none</td><td>the same object, until it is final</td></tr>
 <tr><td><code>GET /v1/items</code></td><td>none</td><td>item names and field names, never values</td></tr>
 <tr><td><code>GET /v1/search?q=</code></td><td>none</td><td>the same, matched by name</td></tr>
-</tbody></table></div>
-<pre><code>curl -s -X POST ` + agentURL(cfg) + `/v1/requests \
+</tbody></table></div>`)
+	b.WriteString(`<pre><code>curl -s -X POST "$BROKER_URL/v1/requests" \
   -H "Authorization: Bearer $BROKER_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"item":"staging-db","field":"password","reason":"run migrations on staging"}'</code></pre>`)
+  -d '{"item":"staging-db","field":"password","reason":"run migrations"}'</code></pre>`)
 
 	b.WriteString(`<h2>Or use the CLI</h2><div class="card">
 <div class="row"><div class="grow"><div class="t">broker-get</div><div class="d">One JSON line on stdout. Exit 0 approved, 1 denied, 2 rejected.</div></div></div>
 </div><pre><code>broker-get staging-db password --reason "run migrations on staging"
-broker-get --env PGPASSWORD staging-db password --reason "run migrations" -- psql -h db -c "select 1"
+broker-get --env PGPASSWORD staging-db password --reason "migrate" -- psql -c "select 1"
 broker-get list
 broker-get search staging</code></pre>`)
 
@@ -179,7 +179,8 @@ func (s *Server) mcpGuide(r *http.Request) guidePage {
 }</code></pre>`)
 	b.WriteString(`<div class="card">
 <div class="row"><div class="grow"><div class="t">http</div><div class="d">The broker also speaks MCP over HTTP on the same agent address, at <code>/mcp</code>, with the same bearer token.</div></div></div>
-</div><pre><code>curl -s -X POST ` + agentURL(cfg) + `/mcp \
+</div>`)
+	b.WriteString(`<pre><code>curl -s -X POST "$BROKER_URL/mcp" \
   -H "Authorization: Bearer $BROKER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>`)
